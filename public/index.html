@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WebSocket Test</title>
+  </head>
+  <body>
+    <h1>WebSocket Test Client</h1>
+    <p>Check console for WebSocket events.</p>
+    <input type="text" id="messageInput" placeholder="Type a message" />
+    <button onclick="sendMessage()">Send</button>
+    <script>
+      // Replace 'user123' with your unique user ID
+      const userId = "user123";
+
+      // Connect to the WebSocket server
+      const socket = new WebSocket(`ws://localhost:3000/ws/${userId}`);
+
+      // WebSocket event listeners
+      socket.addEventListener("open", () => {
+        console.log("WebSocket connection established");
+      });
+
+      socket.addEventListener("message", (event) => {
+        console.log("Message from server:", event.data);
+      });
+
+      socket.addEventListener("close", () => {
+        console.log("WebSocket connection closed");
+      });
+
+      socket.addEventListener("error", (error) => {
+        console.error("WebSocket error:", error);
+      });
+
+      // Send a message to the server
+      function sendMessage() {
+        const messageInput = document.getElementById("messageInput");
+        const message = {
+          from: userId,
+          to: "anotherUser", // Replace with the recipient's user ID
+          event: "CUSTOM_EVENT",
+          data: messageInput.value,
+        };
+        socket.send(JSON.stringify(message));
+        console.log("Message sent:", message);
+        messageInput.value = "";
+      }
+    </script>
+  </body>
+</html>

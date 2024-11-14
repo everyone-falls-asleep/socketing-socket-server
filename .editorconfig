@@ -1,0 +1,26 @@
+# EditorConfig is awesome: https://editorconfig.org
+
+# 최상위 EditorConfig 파일임을 지정
+root = true
+
+# 모든 파일에 적용
+[*]
+charset = utf-8                 # 파일 인코딩은 UTF-8
+end_of_line = lf                # 줄 끝 스타일은 LF (\n)
+insert_final_newline = true     # 파일 끝에 빈 줄 추가
+trim_trailing_whitespace = true # 줄 끝 공백 제거
+
+# Go 파일에 적용
+[*.go]
+indent_style = tab              # 들여쓰기는 탭 사용
+indent_size = 4                 # 탭 크기는 4 스페이스
+max_line_length = 120           # 한 줄의 최대 길이는 120자
+
+# Markdown, JSON, YAML 파일에 적용
+[*.{md,json,yaml,yml}]
+indent_style = space            # 들여쓰기는 스페이스 사용
+indent_size = 2                 # 스페이스 크기는 2
+
+# Makefile에 적용
+[Makefile]
+indent_style = tab              # 들여쓰기는 탭 사용
