@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Fastify + Socket.IO with ESM</title>
+    <title>Fastify + Socket.IO Chat</title>
     <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
     <style>
       body {
@@ -20,11 +20,18 @@
         margin: 10px 0;
       }
 
+      #main-container {
+        display: flex;
+        flex-grow: 1;
+        overflow: hidden;
+      }
+
       #chat-container {
         display: flex;
         flex-direction: column;
         flex-grow: 1;
         overflow: hidden;
+        border-right: 1px solid #ddd;
       }
 
       #messages {
@@ -33,7 +40,7 @@
         padding: 10px;
         list-style-type: none;
         margin: 0;
-        border: 1px solid #ddd;
+        border-bottom: 1px solid #ddd;
         height: 100%;
       }
 
@@ -76,17 +83,51 @@
       button:hover {
         background-color: #0056b3;
       }
+
+      #user-info {
+        width: 250px;
+        padding: 10px;
+        background-color: #f9f9f9;
+        overflow-y: auto;
+      }
+
+      #user-info p {
+        margin: 5px 0;
+        font-size: 16px;
+      }
+
+      #user-list {
+        list-style-type: none;
+        margin: 0;
+        padding: 0;
+      }
+
+      #user-list li {
+        padding: 5px 10px;
+        border-bottom: 1px solid #eee;
+      }
     </style>
   </head>
   <body>
-    <h1>Fastify + Socket.IO Example</h1>
+    <h1>Fastify + Socket.IO Chat</h1>
 
-    <div id="chat-container">
-      <ul id="messages"></ul>
-      <div id="input-container">
-        <input id="nickname" type="text" placeholder="Enter your nickname" />
-        <input id="message" type="text" placeholder="Type your message here" />
-        <button onclick="sendMessage()">Send</button>
+    <div id="main-container">
+      <div id="chat-container">
+        <ul id="messages"></ul>
+        <div id="input-container">
+          <input id="nickname" type="text" placeholder="Enter your nickname" />
+          <input
+            id="message"
+            type="text"
+            placeholder="Type your message here"
+          />
+          <button onclick="sendMessage()">Send</button>
+        </div>
+      </div>
+
+      <div id="user-info">
+        <p id="user-count">Connected users: 0</p>
+        <ul id="user-list"></ul>
       </div>
     </div>
 
@@ -97,14 +138,28 @@
 
       let nickname = "Anonymous";
 
+      // 닉네임 설정
       document.getElementById("nickname").addEventListener("input", (event) => {
         nickname = event.target.value || "Anonymous";
+        socket.emit("setNickname", nickname);
       });
 
-      socket.on("connect", () => {
-        console.log("Connected to server");
+      // 메시지 기록 수신
+      socket.on("messageHistory", (history) => {
+        const messagesList = document.getElementById("messages");
+        messagesList.innerHTML = ""; // 기존 메시지 초기화
+
+        history.forEach((message) => {
+          const newMessage = document.createElement("li");
+          newMessage.textContent = message;
+          messagesList.appendChild(newMessage);
+        });
+
+        // 스크롤을 가장 아래로 이동
+        messagesList.scrollTop = messagesList.scrollHeight;
       });
 
+      // 실시간 메시지 수신
       socket.on("message", (message) => {
         const messagesList = document.getElementById("messages");
         const newMessage = document.createElement("li");
@@ -115,17 +170,23 @@
         messagesList.scrollTop = messagesList.scrollHeight;
       });
 
-      socket.on("messageHistory", (history) => {
-        const messagesList = document.getElementById("messages");
-        messagesList.innerHTML = ""; // 기존 메시지 초기화
+      // 접속자 정보 업데이트
+      socket.on("userList", ({ count, users }) => {
+        // 접속자 수 업데이트
+        const userCount = document.getElementById("user-count");
+        userCount.textContent = `Connected users: ${count}`;
 
-        history.forEach((message) => {
-          const newMessage = document.createElement("li");
-          newMessage.textContent = message;
-          messagesList.appendChild(newMessage);
+        // 닉네임 리스트 업데이트
+        const userList = document.getElementById("user-list");
+        userList.innerHTML = ""; // 기존 목록 초기화
+        users.forEach((nickname) => {
+          const listItem = document.createElement("li");
+          listItem.textContent = nickname;
+          userList.appendChild(listItem);
         });
       });
 
+      // 메시지 전송
       function sendMessage() {
         const input = document.getElementById("message");
         const message = input.value;
@@ -136,6 +197,7 @@
         }
       }
 
+      // Enter 키로 메시지 전송
       document
         .getElementById("message")
         .addEventListener("keydown", (event) => {

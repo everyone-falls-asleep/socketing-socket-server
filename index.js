@@ -46,13 +46,28 @@ const io = new Server(fastify.server, {
 });
 
 const messageHistory = [];
+const connectedUsers = new Map();
 
 io.on("connection", (socket) => {
   fastify.log.info(`New client connected: ${socket.id}`);
 
+  connectedUsers.set(socket.id, "Anonymous");
+
   if (messageHistory.length > 0) {
     socket.emit("messageHistory", messageHistory);
   }
+
+  const broadcastUserList = () => {
+    const userList = Array.from(connectedUsers.values());
+    io.emit("userList", { count: connectedUsers.size, users: userList });
+  };
+  broadcastUserList();
+
+  // 닉네임 설정 처리
+  socket.on("setNickname", (nickname) => {
+    connectedUsers.set(socket.id, nickname || "Anonymous");
+    broadcastUserList();
+  });
 
   socket.on("message", (data) => {
     fastify.log.info(`Message received: ${data}`);
@@ -68,6 +83,8 @@ io.on("connection", (socket) => {
 
   socket.on("disconnect", () => {
     fastify.log.info(`Client disconnected: ${socket.id}`);
+    connectedUsers.delete(socket.id);
+    broadcastUserList();
   });
 });
 
