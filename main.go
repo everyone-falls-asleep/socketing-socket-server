@@ -25,10 +25,8 @@ func main() {
 	// Start a new Fiber application
 	app := fiber.New()
 
-	// Serve the HTML page at the root
-	app.Get("/", func(c *fiber.Ctx) error {
-		return c.SendFile("./index.html")
-	})
+	// Serve static files from the "public" directory
+	app.Static("/", "./public")
 
 	// WebSocket route group with middleware
 	wsGroup := app.Group("/ws")
