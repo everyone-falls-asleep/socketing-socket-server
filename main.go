@@ -25,18 +25,21 @@ func main() {
 	// Start a new Fiber application
 	app := fiber.New()
 
-	// Middleware to handle WebSocket upgrade
-	app.Use(func(c *fiber.Ctx) error {
+	// Serve the HTML page at the root
+	app.Get("/", func(c *fiber.Ctx) error {
+		return c.SendFile("./index.html")
+	})
+
+	// WebSocket route group with middleware
+	wsGroup := app.Group("/ws")
+
+	// Apply middleware only to WebSocket routes
+	wsGroup.Use(func(c *fiber.Ctx) error {
 		if websocket.IsWebSocketUpgrade(c) {
 			c.Locals("allowed", true)
 			return c.Next()
 		}
 		return fiber.ErrUpgradeRequired
-	})
-
-	// Serve the HTML page at the root
-	app.Get("/", func(c *fiber.Ctx) error {
-		return c.SendFile("./index.html")
 	})
 
 	// Socket.io event handlers
@@ -64,7 +67,7 @@ func main() {
 	})
 
 	// WebSocket route
-	app.Get("/ws/:id", socketio.New(func(kws *socketio.Websocket) {
+	wsGroup.Get("/:id", socketio.New(func(kws *socketio.Websocket) {
 		userId := kws.Params("id")
 		clients[userId] = kws.UUID
 		kws.SetAttribute("user_id", userId)
