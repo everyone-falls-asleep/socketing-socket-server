@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Fastify + Socket.IO with ESM</title>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+  </head>
+  <body>
+    <h1>Fastify + Socket.IO Example</h1>
+
+    <div>
+      <label for="nickname">Set your nickname:</label>
+      <input id="nickname" type="text" placeholder="Enter your nickname" />
+    </div>
+    <br />
+    <input id="message" type="text" placeholder="Type your message here" />
+    <button onclick="sendMessage()">Send</button>
+
+    <ul id="messages"></ul>
+
+    <script>
+      const socket = io(`${location.protocol}//${location.host}`);
+
+      let nickname = "Anonymous";
+
+      document.getElementById("nickname").addEventListener("input", (event) => {
+        nickname = event.target.value || "Anonymous";
+      });
+
+      socket.on("connect", () => {
+        console.log("Connected to server");
+      });
+
+      socket.on("message", (message) => {
+        const messagesList = document.getElementById("messages");
+        const newMessage = document.createElement("li");
+        newMessage.textContent = message;
+        messagesList.appendChild(newMessage);
+      });
+
+      function sendMessage() {
+        const input = document.getElementById("message");
+        const message = input.value;
+
+        if (message.trim()) {
+          socket.emit("message", `${nickname}: ${message}`);
+          input.value = "";
+        }
+      }
+
+      document
+        .getElementById("message")
+        .addEventListener("keydown", (event) => {
+          if (event.key === "Enter") {
+            sendMessage();
+          }
+        });
+    </script>
+  </body>
+</html>
