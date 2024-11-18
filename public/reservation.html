@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Redraw Non-Overlapping Circles</title>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <style>
+      body {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        margin: 0;
+        background-color: #f0f0f0;
+      }
+      canvas {
+        border: 1px solid #ccc;
+        margin-bottom: 10px;
+      }
+      button {
+        padding: 10px 20px;
+        font-size: 16px;
+        background-color: #007bff;
+        color: white;
+        border: none;
+        border-radius: 5px;
+        cursor: pointer;
+      }
+      button:hover {
+        background-color: #0056b3;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="canvas" width="400" height="400"></canvas>
+    <button id="redrawButton">Redraw Circles</button>
+    <script>
+      const socket = io(`${location.protocol}//${location.host}`, {
+        transports: ["websocket"],
+      });
+      const canvas = document.getElementById("canvas");
+      const ctx = canvas.getContext("2d");
+
+      const radius = 20;
+      let circles = [];
+
+      // 원 그리기 함수
+      function drawCircle(x, y, color) {
+        ctx.beginPath();
+        ctx.arc(x, y, radius, 0, Math.PI * 2);
+        ctx.fillStyle = color;
+        ctx.fill();
+        ctx.stroke();
+      }
+
+      // 캔버스 다시 그리기
+      function redrawCanvas() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        circles.forEach(({ x, y, selectedBy }) => {
+          if (selectedBy === socket.id) {
+            drawCircle(x, y, "lightgreen"); // 내가 선택한 원
+          } else if (selectedBy) {
+            drawCircle(x, y, "red"); // 다른 사람이 선택한 원
+          } else {
+            drawCircle(x, y, "blue"); // 선택되지 않은 원
+          }
+        });
+      }
+
+      // 서버에서 캔버스 상태 업데이트를 받았을 때
+      socket.on("updateCanvas", (serverState) => {
+        circles = serverState; // 서버 상태 동기화
+        redrawCanvas(); // 캔버스 다시 그리기
+      });
+
+      // 선택 실패 메시지 처리
+      socket.on("selectionFailed", ({ message }) => {
+        alert(message); // 사용자에게 알림
+      });
+
+      // 원 클릭 이벤트 처리
+      canvas.addEventListener("click", (event) => {
+        const rect = canvas.getBoundingClientRect();
+        const x = event.clientX - rect.left;
+        const y = event.clientY - rect.top;
+
+        // 클릭한 원 찾기
+        const circleIndex = circles.findIndex(({ x: cx, y: cy }) => {
+          const dx = cx - x;
+          const dy = cy - y;
+          return Math.sqrt(dx * dx + dy * dy) < radius;
+        });
+
+        if (circleIndex !== -1) {
+          socket.emit("selectCircle", { circleIndex }); // 서버에 선택 요청
+        }
+      });
+
+      // 버튼 이벤트 리스너
+      document.getElementById("redrawButton").addEventListener("click", () => {
+        socket.emit("requestNewCircles"); // 서버에 새 원 생성 요청
+      });
+    </script>
+  </body>
+</html>

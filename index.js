@@ -6,6 +6,37 @@ import fastifyStatic from "@fastify/static";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
+const canvasWidth = 400;
+const canvasHeight = 400;
+const radius = 20;
+const canvasState = []; // 캔버스 상태를 저장할 배열
+
+// 랜덤 원 생성 함수
+function generateRandomCircles() {
+  canvasState.length = 0; // 기존 상태 초기화
+  let attempts = 0;
+
+  while (canvasState.length < 4 && attempts < 1000) {
+    const x = Math.random() * (canvasWidth - 2 * radius) + radius;
+    const y = Math.random() * (canvasHeight - 2 * radius) + radius;
+
+    // 원이 겹치지 않게 생성
+    const isOverlapping = canvasState.some((circle) => {
+      const dx = circle.x - x;
+      const dy = circle.y - y;
+      return Math.sqrt(dx * dx + dy * dy) < 2 * radius;
+    });
+
+    if (!isOverlapping) {
+      canvasState.push({ x, y, selectedBy: null }); // `selectedBy`는 선택한 클라이언트 ID
+    }
+
+    attempts++;
+  }
+}
+
+generateRandomCircles();
+
 const schema = {
   type: "object",
   required: ["PORT"],
@@ -37,6 +68,10 @@ await fastify.register(fastifyStatic, {
   prefix: "/",
 });
 
+fastify.get("/reservation", async (request, reply) => {
+  return reply.sendFile("reservation.html");
+});
+
 const io = new Server(fastify.server, {
   cors: {
     origin: "*",
@@ -56,6 +91,39 @@ io.on("connection", (socket) => {
   if (messageHistory.length > 0) {
     socket.emit("messageHistory", messageHistory);
   }
+
+  // 클라이언트가 초기 상태 요청 시
+  socket.emit("updateCanvas", canvasState);
+
+  // 원 다시 생성 요청 처리
+  socket.on("requestNewCircles", () => {
+    generateRandomCircles(); // 새로운 원 정보 생성
+    io.emit("updateCanvas", canvasState); // 모든 클라이언트에 브로드캐스트
+  });
+
+  // 원 선택 요청 처리
+  socket.on("selectCircle", ({ circleIndex }) => {
+    const circle = canvasState[circleIndex];
+
+    // 이미 다른 사람이 선택한 원인지 확인
+    if (!circle || (circle.selectedBy && circle.selectedBy !== socket.id)) {
+      socket.emit("selectionFailed", {
+        message: "This circle is already selected.",
+      });
+      return;
+    }
+
+    // 원 선택 상태 업데이트
+    canvasState.forEach((c, index) => {
+      if (index === circleIndex) {
+        c.selectedBy = c.selectedBy === socket.id ? null : socket.id; // 선택/해제
+      } else if (c.selectedBy === socket.id) {
+        c.selectedBy = null; // 한 번에 하나만 선택 가능
+      }
+    });
+
+    io.emit("updateCanvas", canvasState); // 모든 클라이언트에 업데이트 브로드캐스트
+  });
 
   const broadcastUserList = () => {
     const userList = Array.from(connectedUsers.values());
@@ -85,6 +153,12 @@ io.on("connection", (socket) => {
     fastify.log.info(`Client disconnected: ${socket.id}`);
     connectedUsers.delete(socket.id);
     broadcastUserList();
+    canvasState.forEach((circle) => {
+      if (circle.selectedBy === socket.id) {
+        circle.selectedBy = null;
+      }
+    });
+    io.emit("updateCanvas", canvasState);
   });
 });
 
