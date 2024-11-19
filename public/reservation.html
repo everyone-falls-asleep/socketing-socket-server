@@ -46,6 +46,29 @@
       const radius = 20;
       let circles = [];
 
+      // 캔버스 부분 지우기
+      function clearCircle(x, y) {
+        ctx.clearRect(
+          x - radius - 1,
+          y - radius - 1,
+          2 * (radius + 1),
+          2 * (radius + 1)
+        );
+      }
+
+      // 특정 원 다시 그리기
+      function updateCircle(circle) {
+        clearCircle(circle.x, circle.y); // 해당 원 주변만 지움
+
+        const color = circle.selectedBy
+          ? circle.selectedBy === socket.id
+            ? "lightgreen" // 내가 선택한 원
+            : "red" // 다른 사람이 선택한 원
+          : "blue"; // 선택되지 않은 원
+
+        drawCircle(circle.x, circle.y, color);
+      }
+
       // 원 그리기 함수
       function drawCircle(x, y, color) {
         ctx.beginPath();
@@ -82,7 +105,7 @@
         );
         if (index !== -1) {
           circles[index] = updatedCircle; // 해당 원 정보 업데이트
-          redrawCanvas(); // 캔버스 다시 그리기
+          updateCircle(updatedCircle); // 부분 업데이트
         }
       });
 
