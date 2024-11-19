@@ -43,10 +43,16 @@ generateRandomCircles();
 
 const schema = {
   type: "object",
-  required: ["PORT"],
+  required: ["PORT", "CACHE_HOST", "CACHE_PORT"],
   properties: {
     PORT: {
       type: "string",
+    },
+    CACHE_HOST: {
+      type: "string",
+    },
+    CACHE_PORT: {
+      type: "integer",
     },
   },
 };
