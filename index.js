@@ -5,6 +5,7 @@ import cors from "@fastify/cors";
 import fastifyStatic from "@fastify/static";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { randomUUID } from "node:crypto";
 
 const canvasWidth = 400;
 const canvasHeight = 400;
@@ -28,7 +29,7 @@ function generateRandomCircles() {
     });
 
     if (!isOverlapping) {
-      canvasState.push({ x, y, selectedBy: null }); // `selectedBy`는 선택한 클라이언트 ID
+      canvasState.push({ id: randomUUID(), x, y, selectedBy: null }); // `selectedBy`는 선택한 클라이언트 ID
     }
 
     attempts++;
@@ -102,8 +103,8 @@ io.on("connection", (socket) => {
   });
 
   // 원 선택 요청 처리
-  socket.on("selectCircle", ({ circleIndex }) => {
-    const circle = canvasState[circleIndex];
+  socket.on("selectCircle", ({ circleId }) => {
+    const circle = canvasState.find((c) => c.id === circleId);
 
     // 이미 다른 사람이 선택한 원인지 확인
     if (!circle || (circle.selectedBy && circle.selectedBy !== socket.id)) {
@@ -114,8 +115,8 @@ io.on("connection", (socket) => {
     }
 
     // 원 선택 상태 업데이트
-    canvasState.forEach((c, index) => {
-      if (index === circleIndex) {
+    canvasState.forEach((c) => {
+      if (c.id === circleId) {
         c.selectedBy = c.selectedBy === socket.id ? null : socket.id; // 선택/해제
       } else if (c.selectedBy === socket.id) {
         c.selectedBy = null; // 한 번에 하나만 선택 가능

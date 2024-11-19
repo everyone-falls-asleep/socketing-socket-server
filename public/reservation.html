@@ -87,14 +87,14 @@
         const y = event.clientY - rect.top;
 
         // 클릭한 원 찾기
-        const circleIndex = circles.findIndex(({ x: cx, y: cy }) => {
+        const clickedCircle = circles.find(({ x: cx, y: cy }) => {
           const dx = cx - x;
           const dy = cy - y;
           return Math.sqrt(dx * dx + dy * dy) < radius;
         });
 
-        if (circleIndex !== -1) {
-          socket.emit("selectCircle", { circleIndex }); // 서버에 선택 요청
+        if (clickedCircle) {
+          socket.emit("selectCircle", { circleId: clickedCircle.id }); // 서버에 선택 요청
         }
       });
 
