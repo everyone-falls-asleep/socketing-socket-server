@@ -115,15 +115,23 @@ io.on("connection", (socket) => {
     }
 
     // 원 선택 상태 업데이트
-    canvasState.forEach((c) => {
-      if (c.id === circleId) {
-        c.selectedBy = c.selectedBy === socket.id ? null : socket.id; // 선택/해제
-      } else if (c.selectedBy === socket.id) {
-        c.selectedBy = null; // 한 번에 하나만 선택 가능
-      }
-    });
+    const previousSelected = canvasState.find(
+      (c) => c.selectedBy === socket.id
+    );
 
-    io.emit("updateCanvas", canvasState); // 모든 클라이언트에 업데이트 브로드캐스트
+    if (circle.selectedBy === socket.id) {
+      // 원 선택 취소
+      circle.selectedBy = null;
+    } else {
+      // 다른 원 선택
+      if (previousSelected) {
+        previousSelected.selectedBy = null; // 이전 선택 취소
+        io.emit("updateCircle", previousSelected); // 이전 원 상태 브로드캐스트
+      }
+      circle.selectedBy = socket.id; // 현재 원 선택
+    }
+
+    io.emit("updateCircle", circle); // 현재 원 상태 브로드캐스트
   });
 
   const broadcastUserList = () => {
