@@ -48,6 +48,41 @@
       const canvas = document.getElementById("canvas");
       const ctx = canvas.getContext("2d");
 
+      const cursors = {}; // 상대방 커서를 저장할 객체
+
+      // 마우스 위치 업데이트 이벤트 리스너
+      canvas.addEventListener("mousemove", (event) => {
+        const rect = canvas.getBoundingClientRect();
+        const x = event.clientX - rect.left;
+        const y = event.clientY - rect.top;
+
+        // 서버에 마우스 위치 전송
+        socket.emit("updateMousePosition", { x, y });
+      });
+
+      // 상대방의 마우스 위치 업데이트 수신
+      socket.on("updateMousePosition", ({ id, x, y }) => {
+        cursors[id] = { x, y };
+        redrawCursors();
+      });
+
+      // 상대방 커서 제거
+      socket.on("removeCursor", ({ id }) => {
+        delete cursors[id];
+        redrawCursors();
+      });
+
+      // 캔버스에 상대방 커서 그리기
+      function redrawCursors() {
+        redrawCanvas(); // 기존 캔버스 상태를 다시 그림
+        Object.values(cursors).forEach(({ x, y }) => {
+          ctx.beginPath();
+          ctx.arc(x, y, 5, 0, Math.PI * 2); // 작은 원으로 커서 표시
+          ctx.fillStyle = "red"; // 커서 색상
+          ctx.fill();
+        });
+      }
+
       const radius = 20;
       let circles = [];
       let serverTimeOffset = 0; // 클라이언트와 서버 시간의 차이

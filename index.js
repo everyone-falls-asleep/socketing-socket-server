@@ -95,6 +95,16 @@ const connectedUsers = new Map();
 io.on("connection", (socket) => {
   fastify.log.info(`New client connected: ${socket.id}`);
 
+  // 마우스 위치 업데이트 이벤트 처리
+  socket.on("updateMousePosition", (mouseData) => {
+    // 다른 클라이언트들에게 브로드캐스트
+    socket.broadcast.emit("updateMousePosition", {
+      id: socket.id,
+      x: mouseData.x,
+      y: mouseData.y,
+    });
+  });
+
   connectedUsers.set(socket.id, "Anonymous");
 
   if (messageHistory.length > 0) {
@@ -197,6 +207,7 @@ io.on("connection", (socket) => {
       }
     });
     io.emit("updateCanvas", canvasState);
+    io.emit("removeCursor", { id: socket.id });
   });
 });
 
