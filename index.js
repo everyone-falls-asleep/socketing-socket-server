@@ -69,7 +69,7 @@ await fastify.register(cors, {
 
 await fastify.register(fastifyRedis, {
   host: fastify.config.CACHE_HOST,
-  port: Number(fastify.config.CACHE_PORT),
+  port: fastify.config.CACHE_PORT,
   family: 4,
 });
 
