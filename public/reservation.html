@@ -142,22 +142,70 @@
         socket.emit("requestNewCircles"); // 서버에 새 원 생성 요청
       });
 
+      let remainingTime = 0;
+      let intervalId = null; // 현재 실행 중인 타이머 ID
+
       // 원에 대한 정보 표시
       function displayCircleInfo(circle, event) {
         const infoBox = document.getElementById("circleInfo");
+
         if (circle) {
+          // 기존 타이머 제거
+          if (intervalId) {
+            clearInterval(intervalId);
+            intervalId = null;
+          }
+
+          // 남은 시간 계산
+          remainingTime = circle.expirationTime
+            ? Math.max(0, (circle.expirationTime - Date.now()) / 1000).toFixed(
+                2
+              )
+            : "0.00";
+
           // 정보 표시
-          infoBox.textContent = `Circle ID: ${circle.id}\nSelected By: ${
-            circle.selectedBy || "None"
-          }\nX: ${circle.x.toFixed(2)}\nY: ${circle.y.toFixed(2)}`;
+          infoBox.textContent = `Circle ID: ${circle.id}
+Selected By: ${circle.selectedBy || "None"}
+X: ${circle.x.toFixed(2)}
+Y: ${circle.y.toFixed(2)}
+Remaining Time: ${remainingTime} seconds`;
+
           infoBox.style.visibility = "visible";
 
-          // 마우스 근처에 위치
-          infoBox.style.top = `${event.clientY + 15}px`; // 마우스 아래 15px
-          infoBox.style.left = `${event.clientX + 15}px`; // 마우스 오른쪽 15px
+          // 마우스 위치에 따라 박스 위치 조정
+          infoBox.style.top = `${event.clientY + 15}px`;
+          infoBox.style.left = `${event.clientX + 15}px`;
+
+          // 남은 시간이 있을 경우, 초 단위로 갱신
+          if (remainingTime > 0) {
+            intervalId = setInterval(() => {
+              remainingTime = circle.expirationTime
+                ? Math.max(
+                    0,
+                    (circle.expirationTime - Date.now()) / 1000
+                  ).toFixed(2)
+                : "0.00";
+
+              if (remainingTime === "0.00") {
+                clearInterval(intervalId);
+                intervalId = null;
+              }
+
+              // 갱신된 정보 표시
+              infoBox.textContent = `Circle ID: ${circle.id}
+Selected By: ${circle.selectedBy || "None"}
+X: ${circle.x.toFixed(2)}
+Y: ${circle.y.toFixed(2)}
+Remaining Time: ${remainingTime} seconds`;
+            }, 100); // 100ms마다 갱신
+          }
         } else {
           infoBox.textContent = "";
           infoBox.style.visibility = "hidden"; // 숨기기
+          if (intervalId) {
+            clearInterval(intervalId);
+            intervalId = null; // 기존 타이머 제거
+          }
         }
       }
 

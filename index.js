@@ -11,6 +11,8 @@ const canvasWidth = 800;
 const canvasHeight = 600;
 const radius = 10;
 const canvasState = []; // 캔버스 상태를 저장할 배열
+const SELECTION_TIMEOUT = 10 * 1000; // 선택 만료 시간: 10초
+const timers = new Map(); // 각 원의 만료 타이머 관리
 
 // 랜덤 원 생성 함수
 function generateRandomCircles() {
@@ -106,29 +108,50 @@ io.on("connection", (socket) => {
   socket.on("selectCircle", ({ circleId }) => {
     const circle = canvasState.find((c) => c.id === circleId);
 
-    // 이미 다른 사람이 선택한 원인지 확인
-    if (!circle || (circle.selectedBy && circle.selectedBy !== socket.id)) {
+    if (!circle) {
+      socket.emit("selectionFailed", { message: "Circle not found." });
+      return;
+    }
+
+    // 이미 선택된 원인지 확인
+    if (circle.selectedBy && circle.selectedBy !== socket.id) {
       socket.emit("selectionFailed", {
         message: "This circle is already selected.",
       });
       return;
     }
 
-    // 원 선택 상태 업데이트
+    // 선택 상태 초기화
     const previousSelected = canvasState.find(
       (c) => c.selectedBy === socket.id
     );
+    if (previousSelected) {
+      clearTimeout(timers.get(previousSelected.id)); // 이전 타이머 취소
+      timers.delete(previousSelected.id);
+      previousSelected.selectedBy = null; // 이전 선택 취소
+      previousSelected.expirationTime = null;
+      io.emit("updateCircle", previousSelected); // 이전 원 상태 브로드캐스트
+    }
 
+    // 새로운 원 선택
     if (circle.selectedBy === socket.id) {
-      // 원 선택 취소
+      clearTimeout(timers.get(circle.id)); // 기존 타이머 취소
+      timers.delete(circle.id);
       circle.selectedBy = null;
+      circle.expirationTime = null;
     } else {
-      // 다른 원 선택
-      if (previousSelected) {
-        previousSelected.selectedBy = null; // 이전 선택 취소
-        io.emit("updateCircle", previousSelected); // 이전 원 상태 브로드캐스트
-      }
-      circle.selectedBy = socket.id; // 현재 원 선택
+      circle.selectedBy = socket.id;
+      circle.expirationTime = Date.now() + SELECTION_TIMEOUT;
+
+      // 만료 타이머 설정
+      const timer = setTimeout(() => {
+        circle.selectedBy = null;
+        circle.expirationTime = null;
+        io.emit("updateCircle", circle); // 상태 업데이트
+        timers.delete(circle.id);
+      }, SELECTION_TIMEOUT);
+
+      timers.set(circle.id, timer);
     }
 
     io.emit("updateCircle", circle); // 현재 원 상태 브로드캐스트
