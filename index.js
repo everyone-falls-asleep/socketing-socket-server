@@ -9,7 +9,7 @@ import { randomUUID } from "node:crypto";
 
 const canvasWidth = 800;
 const canvasHeight = 600;
-const radius = 10;
+const radius = 20;
 const canvasState = []; // 캔버스 상태를 저장할 배열
 const SELECTION_TIMEOUT = 10 * 1000; // 선택 만료 시간: 10초
 const timers = new Map(); // 각 원의 만료 타이머 관리
@@ -19,7 +19,7 @@ function generateRandomCircles() {
   canvasState.length = 0; // 기존 상태 초기화
   let attempts = 0;
 
-  while (canvasState.length < 100 && attempts < 2000) {
+  while (canvasState.length < 10 && attempts < 1000) {
     const x = Math.random() * (canvasWidth - 2 * radius) + radius;
     const y = Math.random() * (canvasHeight - 2 * radius) + radius;
 
