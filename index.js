@@ -7,9 +7,9 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 
-const canvasWidth = 400;
-const canvasHeight = 400;
-const radius = 20;
+const canvasWidth = 800;
+const canvasHeight = 600;
+const radius = 10;
 const canvasState = []; // 캔버스 상태를 저장할 배열
 
 // 랜덤 원 생성 함수
@@ -17,7 +17,7 @@ function generateRandomCircles() {
   canvasState.length = 0; // 기존 상태 초기화
   let attempts = 0;
 
-  while (canvasState.length < 4 && attempts < 1000) {
+  while (canvasState.length < 100 && attempts < 2000) {
     const x = Math.random() * (canvasWidth - 2 * radius) + radius;
     const y = Math.random() * (canvasHeight - 2 * radius) + radius;
 

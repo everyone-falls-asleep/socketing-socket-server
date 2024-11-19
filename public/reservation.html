@@ -34,7 +34,7 @@
     </style>
   </head>
   <body>
-    <canvas id="canvas" width="400" height="400"></canvas>
+    <canvas id="canvas" width="800" height="600"></canvas>
     <button id="redrawButton">Redraw Circles</button>
     <script>
       const socket = io(`${location.protocol}//${location.host}`, {
@@ -43,7 +43,7 @@
       const canvas = document.getElementById("canvas");
       const ctx = canvas.getContext("2d");
 
-      const radius = 20;
+      const radius = 10;
       let circles = [];
 
       // 캔버스 부분 지우기
