@@ -3,6 +3,7 @@ import { Server } from "socket.io";
 import fastifyEnv from "@fastify/env";
 import cors from "@fastify/cors";
 import fastifyStatic from "@fastify/static";
+import fastifyRedis from "@fastify/redis";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -57,6 +58,12 @@ const fastify = Fastify({
   logger: true,
 });
 
+await fastify.register(fastifyRedis, {
+  host: "127.0.0.1",
+  port: 6379,
+  family: 4,
+});
+
 await fastify.register(fastifyEnv, {
   schema,
   dotenv: true,
@@ -73,6 +80,35 @@ await fastify.register(fastifyStatic, {
 
 fastify.get("/reservation", async (request, reply) => {
   return reply.sendFile("reservation.html");
+});
+
+fastify.get("/liveness", async (request, reply) => {
+  reply.send({ status: "ok", message: "The server is alive." });
+});
+
+fastify.get("/readiness", async (request, reply) => {
+  try {
+    const redisStatus = await fastify.redis.ping();
+    if (redisStatus === "PONG") {
+      reply.send({
+        status: "ok",
+        message: "The server is ready.",
+        redis: { status: "connected" },
+      });
+    } else {
+      reply.status(500).send({
+        status: "error",
+        message: "The server is not ready.",
+        redis: { status: "disconnected" },
+      });
+    }
+  } catch (error) {
+    reply.status(500).send({
+      status: "error",
+      message: "The server is not ready.",
+      redis: { status: "error", error: error.message },
+    });
+  }
 });
 
 const io = new Server(fastify.server, {
@@ -240,24 +276,50 @@ async function gracefulShutdown(signal) {
 
   fastify.log.info(`Received signal: ${signal}. Starting graceful shutdown...`);
 
+  // 종료 작업 목록
+  const shutdownTasks = [
+    // Socket.IO 연결 종료
+    (async () => {
+      try {
+        io.sockets.sockets.forEach((socket) => {
+          socket.disconnect(true);
+        });
+        fastify.log.info("All Socket.IO connections have been closed.");
+      } catch (error) {
+        fastify.log.error("Error closing Socket.IO connections:", error);
+      }
+    })(),
+
+    // Fastify 서버 종료
+    (async () => {
+      try {
+        await fastify.close();
+        fastify.log.info("Fastify server has been closed.");
+      } catch (error) {
+        fastify.log.error("Error closing Fastify server:", error);
+      }
+    })(),
+
+    // Redis 연결 종료
+    (async () => {
+      try {
+        if (fastify.redis) {
+          await fastify.redis.quit();
+          fastify.log.info("Redis connection has been closed.");
+        }
+      } catch (error) {
+        fastify.log.error("Error closing Redis connection:", error);
+      }
+    })(),
+  ];
+
   try {
-    io.sockets.sockets.forEach((socket) => {
-      socket.disconnect(true);
-    });
-    fastify.log.info("All Socket.IO connections have been closed.");
-
-    await fastify.close();
-    fastify.log.info("Fastify server has been closed.");
-
-    // 기타 필요한 종료 작업 (예: DB 연결 해제)
-    // await database.disconnect();
-    fastify.log.info("Additional cleanup tasks completed.");
-
-    fastify.log.info("Graceful shutdown complete. Exiting process...");
-    process.exit(0);
+    await Promise.all(shutdownTasks); // 모든 종료 작업 실행
+    fastify.log.info("Graceful shutdown complete.");
+    process.exit(0); // 성공적으로 종료
   } catch (error) {
-    fastify.log.error("Error occurred during graceful shutdown:", error);
-    process.exit(1);
+    fastify.log.error("Error during graceful shutdown:", error);
+    process.exit(1); // 오류로 종료
   }
 }
 
