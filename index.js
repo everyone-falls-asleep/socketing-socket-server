@@ -4,6 +4,7 @@ import fastifyEnv from "@fastify/env";
 import cors from "@fastify/cors";
 import fastifyStatic from "@fastify/static";
 import fastifyRedis from "@fastify/redis";
+import fastifyPostgres from "@fastify/postgres";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -43,7 +44,7 @@ generateRandomCircles();
 
 const schema = {
   type: "object",
-  required: ["PORT", "CACHE_HOST", "CACHE_PORT"],
+  required: ["PORT", "CACHE_HOST", "CACHE_PORT", "DB_URL"],
   properties: {
     PORT: {
       type: "string",
@@ -53,6 +54,9 @@ const schema = {
     },
     CACHE_PORT: {
       type: "integer",
+    },
+    DB_URL: {
+      type: "string",
     },
   },
 };
@@ -79,6 +83,10 @@ await fastify.register(fastifyRedis, {
   family: 4,
 });
 
+await fastify.register(fastifyPostgres, {
+  connectionString: fastify.config.DB_URL,
+});
+
 await fastify.register(fastifyStatic, {
   root: join(__dirname, "public"),
   prefix: "/",
@@ -94,25 +102,62 @@ fastify.get("/liveness", async (request, reply) => {
 
 fastify.get("/readiness", async (request, reply) => {
   try {
-    const redisStatus = await fastify.redis.ping();
-    if (redisStatus === "PONG") {
+    let redisStatus = { status: "disconnected", message: "" };
+    let dbStatus = { status: "disconnected", message: "" };
+
+    // Redis 상태 확인
+    try {
+      const pingResult = await fastify.redis.ping();
+      if (pingResult === "PONG") {
+        redisStatus = { status: "connected", message: "Redis is available." };
+      } else {
+        redisStatus.message = "Redis responded, but not with 'PONG'.";
+      }
+    } catch (error) {
+      redisStatus.message = `Redis connection failed: ${error.message}`;
+    }
+
+    // PostgreSQL 상태 확인
+    try {
+      const client = await fastify.pg.connect();
+      if (client) {
+        dbStatus = {
+          status: "connected",
+          message: "PostgreSQL is connected and responsive.",
+        };
+        client.release(); // 연결 반환
+      }
+    } catch (error) {
+      dbStatus.message = `PostgreSQL connection failed: ${error.message}`;
+    }
+
+    // 모든 상태가 정상일 때
+    if (redisStatus.status === "connected" && dbStatus.status === "connected") {
       reply.send({
         status: "ok",
         message: "The server is ready.",
-        redis: { status: "connected" },
+        redis: redisStatus,
+        database: dbStatus,
       });
     } else {
+      // 하나라도 비정상일 때
       reply.status(500).send({
         status: "error",
-        message: "The server is not ready.",
-        redis: { status: "disconnected" },
+        message: "The server is not fully ready. See details below.",
+        redis: redisStatus,
+        database: dbStatus,
       });
     }
-  } catch (error) {
+  } catch (unexpectedError) {
+    // 예기치 못한 오류 처리
+    fastify.log.error(
+      "Readiness check encountered an unexpected error:",
+      unexpectedError
+    );
     reply.status(500).send({
       status: "error",
-      message: "The server is not ready.",
-      redis: { status: "error", error: error.message },
+      message: "Unexpected error occurred during readiness check.",
+      error: unexpectedError.message,
     });
   }
 });
