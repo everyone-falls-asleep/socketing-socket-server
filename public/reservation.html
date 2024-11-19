@@ -141,6 +141,57 @@
       document.getElementById("redrawButton").addEventListener("click", () => {
         socket.emit("requestNewCircles"); // 서버에 새 원 생성 요청
       });
+
+      // 원에 대한 정보 표시
+      function displayCircleInfo(circle, event) {
+        const infoBox = document.getElementById("circleInfo");
+        if (circle) {
+          // 정보 표시
+          infoBox.textContent = `Circle ID: ${circle.id}\nSelected By: ${
+            circle.selectedBy || "None"
+          }\nX: ${circle.x.toFixed(2)}\nY: ${circle.y.toFixed(2)}`;
+          infoBox.style.visibility = "visible";
+
+          // 마우스 근처에 위치
+          infoBox.style.top = `${event.clientY + 15}px`; // 마우스 아래 15px
+          infoBox.style.left = `${event.clientX + 15}px`; // 마우스 오른쪽 15px
+        } else {
+          infoBox.textContent = "";
+          infoBox.style.visibility = "hidden"; // 숨기기
+        }
+      }
+
+      // 마우스 이동 이벤트 처리
+      canvas.addEventListener("mousemove", (event) => {
+        const rect = canvas.getBoundingClientRect();
+        const x = event.clientX - rect.left;
+        const y = event.clientY - rect.top;
+
+        // Hover 중인 원 찾기
+        const hoveredCircle = circles.find(({ x: cx, y: cy }) => {
+          const dx = cx - x;
+          const dy = cy - y;
+          return Math.sqrt(dx * dx + dy * dy) < radius;
+        });
+
+        displayCircleInfo(hoveredCircle, event);
+      });
+
+      // HTML에 정보 표시용 박스 추가
+      const infoBox = document.createElement("div");
+      infoBox.id = "circleInfo";
+      infoBox.style.position = "absolute";
+      infoBox.style.pointerEvents = "none"; // 마우스 이벤트 무시
+      infoBox.style.backgroundColor = "rgba(0, 0, 0, 0.7)"; // 반투명 검은색
+      infoBox.style.color = "white";
+      infoBox.style.padding = "8px 12px";
+      infoBox.style.borderRadius = "5px";
+      infoBox.style.fontFamily = "Arial, sans-serif";
+      infoBox.style.fontSize = "12px";
+      infoBox.style.whiteSpace = "pre-line"; // 개행 처리
+      infoBox.style.visibility = "hidden"; // 기본 숨김
+      infoBox.style.zIndex = "1000"; // 상단에 표시
+      document.body.appendChild(infoBox);
     </script>
   </body>
 </html>
