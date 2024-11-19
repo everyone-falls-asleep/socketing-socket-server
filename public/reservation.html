@@ -46,14 +46,19 @@
       const radius = 10;
       let circles = [];
 
-      // 캔버스 부분 지우기
+      // 캔버스에서 특정 원 영역만 다시 초기화
       function clearCircle(x, y) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(x, y, radius + 1, 0, Math.PI * 2); // 정확한 원 영역
+        ctx.clip(); // 클리핑 경로 설정
         ctx.clearRect(
           x - radius - 1,
           y - radius - 1,
           2 * (radius + 1),
           2 * (radius + 1)
-        );
+        ); // 해당 영역만 지움
+        ctx.restore();
       }
 
       // 특정 원 다시 그리기
