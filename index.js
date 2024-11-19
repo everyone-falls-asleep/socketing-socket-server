@@ -83,6 +83,12 @@ const io = new Server(fastify.server, {
   transports: ["websocket"],
 });
 
+// 실시간 서버 시간 브로드캐스트
+setInterval(() => {
+  const serverTime = new Date().toISOString();
+  io.emit("serverTime", serverTime);
+}, 1000); // 1초마다 서버 시간 전송
+
 const messageHistory = [];
 const connectedUsers = new Map();
 
