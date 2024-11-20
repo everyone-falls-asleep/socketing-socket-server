@@ -214,7 +214,7 @@ io.on("connection", (socket) => {
         LEFT JOIN reservation ON reservation."seatId" = seat.id AND reservation."deletedAt" IS NULL
         LEFT JOIN event_date AS eventDate ON reservation."eventDateId" = eventDate.id
         WHERE seat."eventId" = $1
-        AND eventDate.id = $2
+        AND (eventDate.id = $2 OR eventDate.id IS NULL);
       `;
       const params = [eventId, eventDateId];
 
