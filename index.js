@@ -182,6 +182,88 @@ const connectedUsers = new Map();
 io.on("connection", (socket) => {
   fastify.log.info(`New client connected: ${socket.id}`);
 
+  // 클라이언트가 room 정보를 전달
+  socket.on("joinRoom", async ({ eventId, eventDateId }) => {
+    if (!eventId || !eventDateId) {
+      socket.emit("error", { message: "Invalid room parameters." });
+      return;
+    }
+
+    // room 이름 생성 (eventId와 eventDateId 조합)
+    const roomName = `${eventId}_${eventDateId}`;
+
+    // 클라이언트를 해당 room에 추가
+    socket.join(roomName);
+
+    fastify.log.info(`Client ${socket.id} joined room: ${roomName}`);
+
+    // PostgreSQL 쿼리 실행
+    try {
+      const query = `
+        SELECT
+          seat.id AS seat_id,
+          seat.cx,
+          seat.cy,
+          seat.area,
+          seat.row,
+          seat.number,
+          reservation.id AS reservation_id,
+          eventDate.id AS event_date_id,
+          eventDate.date
+        FROM seat
+        LEFT JOIN reservation ON reservation."seatId" = seat.id AND reservation."deletedAt" IS NULL
+        LEFT JOIN event_date AS eventDate ON reservation."eventDateId" = eventDate.id
+        WHERE seat."eventId" = $1
+        AND eventDate.id = $2
+      `;
+      const params = [eventId, eventDateId];
+
+      const { rows } = await fastify.pg.query(query, params);
+
+      // 데이터 가공
+      const seatMap = new Map();
+
+      rows.forEach((row) => {
+        if (!seatMap.has(row.seat_id)) {
+          seatMap.set(row.seat_id, {
+            id: row.seat_id,
+            cx: row.cx,
+            cy: row.cy,
+            area: row.area,
+            row: row.row,
+            number: row.number,
+            reservations: [],
+          });
+        }
+
+        if (row.reservation_id) {
+          seatMap.get(row.seat_id).reservations.push({
+            id: row.reservation_id,
+            eventDate: row.event_date_id
+              ? {
+                  id: row.event_date_id,
+                  date: row.date,
+                }
+              : null,
+          });
+        }
+      });
+
+      const result = Array.from(seatMap.values());
+
+      // 클라이언트에게 데이터 전송
+      socket.emit("roomJoined", {
+        message: `You have joined the room: ${roomName}`,
+        seats: result,
+      });
+    } catch (error) {
+      fastify.log.error(`Error fetching data for room ${roomName}:`, error);
+      socket.emit("error", {
+        message: "Failed to fetch room data.",
+      });
+    }
+  });
+
   // 마우스 위치 업데이트 이벤트 처리
   socket.on("updateMousePosition", (mouseData) => {
     // 다른 클라이언트들에게 브로드캐스트
