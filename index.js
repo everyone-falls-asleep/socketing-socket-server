@@ -162,6 +162,64 @@ fastify.get("/readiness", async (request, reply) => {
   }
 });
 
+// 좌석 정보를 가져오는 함수 (DB에서 조회)
+async function getSeatsForRoom(eventId, eventDateId) {
+  // PostgreSQL 쿼리 실행
+  const query = `
+      SELECT
+        seat.id AS seat_id,
+        seat.cx,
+        seat.cy,
+        seat.area,
+        seat.row,
+        seat.number,
+        reservation.id AS reservation_id,
+        eventDate.id AS event_date_id,
+        eventDate.date
+      FROM seat
+      LEFT JOIN reservation ON reservation."seatId" = seat.id AND reservation."deletedAt" IS NULL
+      LEFT JOIN event_date AS eventDate ON reservation."eventDateId" = eventDate.id
+      WHERE seat."eventId" = $1
+      AND (eventDate.id = $2 OR eventDate.id IS NULL);
+    `;
+  const params = [eventId, eventDateId];
+
+  const { rows } = await fastify.pg.query(query, params);
+
+  // 데이터 가공
+  const seatMap = new Map();
+
+  rows.forEach((row) => {
+    if (!seatMap.has(row.seat_id)) {
+      seatMap.set(row.seat_id, {
+        id: row.seat_id,
+        cx: row.cx,
+        cy: row.cy,
+        area: row.area,
+        row: row.row,
+        number: row.number,
+        reservations: [],
+        selectedBy: null, // 초기 상태
+        updatedAt: null, // 초기 상태
+      });
+    }
+
+    if (row.reservation_id) {
+      seatMap.get(row.seat_id).reservations.push({
+        id: row.reservation_id,
+        eventDate: row.event_date_id
+          ? {
+              id: row.event_date_id,
+              date: row.date,
+            }
+          : null,
+      });
+    }
+  });
+
+  return Array.from(seatMap.values());
+}
+
 const io = new Server(fastify.server, {
   cors: {
     origin: "*",
@@ -178,6 +236,7 @@ setInterval(() => {
 
 const messageHistory = [];
 const connectedUsers = new Map();
+const seatData = {}; // Room별 좌석 정보를 저장하는 객체
 
 io.on("connection", (socket) => {
   fastify.log.info(`New client connected: ${socket.id}`);
@@ -197,64 +256,16 @@ io.on("connection", (socket) => {
 
     fastify.log.info(`Client ${socket.id} joined room: ${roomName}`);
 
-    // PostgreSQL 쿼리 실행
     try {
-      const query = `
-        SELECT
-          seat.id AS seat_id,
-          seat.cx,
-          seat.cy,
-          seat.area,
-          seat.row,
-          seat.number,
-          reservation.id AS reservation_id,
-          eventDate.id AS event_date_id,
-          eventDate.date
-        FROM seat
-        LEFT JOIN reservation ON reservation."seatId" = seat.id AND reservation."deletedAt" IS NULL
-        LEFT JOIN event_date AS eventDate ON reservation."eventDateId" = eventDate.id
-        WHERE seat."eventId" = $1
-        AND (eventDate.id = $2 OR eventDate.id IS NULL);
-      `;
-      const params = [eventId, eventDateId];
-
-      const { rows } = await fastify.pg.query(query, params);
-
-      // 데이터 가공
-      const seatMap = new Map();
-
-      rows.forEach((row) => {
-        if (!seatMap.has(row.seat_id)) {
-          seatMap.set(row.seat_id, {
-            id: row.seat_id,
-            cx: row.cx,
-            cy: row.cy,
-            area: row.area,
-            row: row.row,
-            number: row.number,
-            reservations: [],
-          });
-        }
-
-        if (row.reservation_id) {
-          seatMap.get(row.seat_id).reservations.push({
-            id: row.reservation_id,
-            eventDate: row.event_date_id
-              ? {
-                  id: row.event_date_id,
-                  date: row.date,
-                }
-              : null,
-          });
-        }
-      });
-
-      const result = Array.from(seatMap.values());
+      // 좌석 정보 생성 또는 가져오기
+      if (!seatData[roomName]) {
+        seatData[roomName] = await getSeatsForRoom(eventId, eventDateId); // DB에서 가져오기
+      }
 
       // 클라이언트에게 데이터 전송
       socket.emit("roomJoined", {
         message: `You have joined the room: ${roomName}`,
-        seats: result,
+        seats: seatData[roomName],
       });
     } catch (error) {
       fastify.log.error(`Error fetching data for room ${roomName}:`, error);
@@ -262,6 +273,48 @@ io.on("connection", (socket) => {
         message: "Failed to fetch room data.",
       });
     }
+  });
+
+  // 좌석 선택 처리
+  socket.on("selectSeat", ({ seatId, eventId, eventDateId }) => {
+    const roomName = `${eventId}_${eventDateId}`;
+
+    // 유효성 검사
+    const seat = seatData[roomName]?.find((s) => s.id === seatId);
+    if (!seat) {
+      socket.emit("error", { message: "Invalid seat ID." });
+      return;
+    }
+
+    // 이미 예매된 좌석인지 확인
+    if (seat.reservations.length !== 0) {
+      socket.emit("error", {
+        message: "Seat is reserved and cannot be selected.",
+      });
+      return;
+    }
+
+    const currentTime = new Date().toISOString();
+
+    if (seat.selectedBy) {
+      // 이미 다른 유저가 선택한 좌석
+      socket.emit("error", {
+        message: "Seat is already selected by another user.",
+      });
+      return;
+    } else {
+      // 선택
+      seat.selectedBy = socket.id;
+      seat.updatedAt = currentTime;
+      fastify.log.info(`Seat ${seatId} selected by ${socket.id}`);
+    }
+
+    // 같은 room의 유저들에게 상태 변경 브로드캐스트
+    io.to(roomName).emit("seatSeleced", {
+      seatId,
+      selectedBy: seat.selectedBy,
+      updatedAt: seat.updatedAt,
+    });
   });
 
   // 마우스 위치 업데이트 이벤트 처리
@@ -377,6 +430,43 @@ io.on("connection", (socket) => {
     });
     io.emit("updateCanvas", canvasState);
     io.emit("removeCursor", { id: socket.id });
+
+    // 연결 해제된 유저가 선택한 좌석 초기화
+    for (const roomName in seatData) {
+      seatData[roomName].forEach((seat) => {
+        if (seat.selectedBy === socket.id) {
+          const currentTime = new Date().toISOString();
+          seat.selectedBy = null;
+          seat.updatedAt = currentTime;
+          io.to(roomName).emit("seatSelected", {
+            seatId: seat.id,
+            selectedBy: null,
+            updatedAt: currentTime,
+          });
+        }
+      });
+      // 모든 클라이언트가 떠났는지 확인 후 데이터 비우기
+      checkAndClearRoomData(roomName);
+    }
+  });
+
+  // Room의 클라이언트 연결 상태 확인 및 데이터 비우기
+  const checkAndClearRoomData = (roomName) => {
+    const room = io.sockets.adapter.rooms.get(roomName);
+    if (!room || room.size === 0) {
+      delete seatData[roomName];
+      fastify.log.info(`Room ${roomName} is now empty. Cleared seat data.`);
+    }
+  };
+
+  // 클라이언트가 room을 떠날 때 처리
+  socket.on("leaveRoom", ({ eventId, eventDateId }) => {
+    const roomName = `${eventId}_${eventDateId}`;
+    socket.leave(roomName);
+    fastify.log.info(`Client ${socket.id} left room: ${roomName}`);
+
+    // 모든 클라이언트가 떠났는지 확인 후 데이터 비우기
+    checkAndClearRoomData(roomName);
   });
 });
 
