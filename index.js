@@ -350,7 +350,7 @@ io.on("connection", (socket) => {
         io.to(roomName).emit("seatSelected", {
           seatId: seat.id,
           selectedBy: null,
-          updatedAt: null,
+          updatedAt: new Date().toISOString(),
           expirationTime: null,
         });
 
