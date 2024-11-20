@@ -428,52 +428,56 @@ io.on("connection", (socket) => {
         seatId
       );
 
-      if (reservationInfo) {
-        const roomName = `${eventId}_${eventDateId}`;
-
-        // 유효성 검사
-        const seat = seatData[roomName]?.find(
-          (s) => s.id === reservationInfo.id
-        );
-        if (!seat) {
-          socket.emit("error", { message: "Invalid seat ID." });
-          return;
-        }
-
-        // 좌석이 이미 예약되었는지 확인
-        if (seat.reservedBy || seat.reservations.length > 0) {
-          socket.emit("error", {
-            message: "Seat is already reserved by another user.",
-          });
-          return;
-        }
-
-        // 타이머가 있다면 취소
-        if (timers.has(seat.id)) {
-          clearTimeout(timers.get(seat.id));
-          timers.delete(seat.id);
-        }
-
-        const currentTime = new Date().toISOString();
-
-        seat.selectedBy = null;
-        seat.updatedAt = currentTime;
-        seat.expirationTime = null;
-        seat.reservedBy = socket.id;
-
-        // 같은 room의 유저들에게 상태 변경 브로드캐스트
-        io.to(roomName).emit("seatSelected", {
-          seatId: seat.id,
-          selectedBy: seat.selectedBy,
-          updatedAt: seat.updatedAt,
-          expirationTime: seat.expirationTime,
-          reservedBy: seat.reservedBy,
+      if (!reservationInfo) {
+        socket.emit("error", {
+          message: "Failed to retrieve seat reservation status.",
         });
-
-        fastify.log.info(
-          `Seat ${seatId} reserved by ${socket.id} in room ${roomName}`
-        );
+        return;
       }
+
+      const roomName = `${eventId}_${eventDateId}`;
+
+      // 유효성 검사
+      const seat = seatData[roomName]?.find((s) => s.id === reservationInfo.id);
+      if (!seat) {
+        socket.emit("error", { message: "Invalid seat ID." });
+        return;
+      }
+
+      // 좌석이 이미 예약되었는지 확인
+      if (seat.reservedBy || seat.reservations.length > 0) {
+        socket.emit("error", {
+          message: "Seat is already reserved by another user.",
+        });
+        return;
+      }
+
+      // 타이머가 있다면 취소
+      if (timers.has(seat.id)) {
+        clearTimeout(timers.get(seat.id));
+        timers.delete(seat.id);
+      }
+
+      const currentTime = new Date().toISOString();
+
+      seat.selectedBy = null;
+      seat.updatedAt = currentTime;
+      seat.expirationTime = null;
+      seat.reservedBy = socket.id;
+      seat.reservations = reservationInfo.reservations;
+
+      // 같은 room의 유저들에게 상태 변경 브로드캐스트
+      io.to(roomName).emit("seatSelected", {
+        seatId: seat.id,
+        selectedBy: seat.selectedBy,
+        updatedAt: seat.updatedAt,
+        expirationTime: seat.expirationTime,
+        reservedBy: seat.reservedBy,
+      });
+
+      fastify.log.info(
+        `Seat ${seatId} reserved by ${socket.id} in room ${roomName}`
+      );
     } catch (error) {
       // 에러 처리
       fastify.log.error(`Error reserving seat: ${error.message}`);
