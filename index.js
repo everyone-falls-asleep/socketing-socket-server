@@ -331,7 +331,7 @@ io.on("connection", (socket) => {
     }
 
     // 같은 room의 유저들에게 상태 변경 브로드캐스트
-    io.to(roomName).emit("seatSeleced", {
+    io.to(roomName).emit("seatSelected", {
       seatId,
       selectedBy: seat.selectedBy,
       updatedAt: seat.updatedAt,
