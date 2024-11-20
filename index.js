@@ -296,6 +296,27 @@ io.on("connection", (socket) => {
 
     const currentTime = new Date().toISOString();
 
+    // 이전에 선택한 좌석을 찾고 취소
+    const previouslySelectedSeat = seatData[roomName]?.find(
+      (s) => s.selectedBy === socket.id
+    );
+    if (previouslySelectedSeat) {
+      // 선택 취소
+      previouslySelectedSeat.selectedBy = null;
+      previouslySelectedSeat.updatedAt = currentTime;
+
+      // 같은 room의 유저들에게 상태 변경 브로드캐스트
+      io.to(roomName).emit("seatSelected", {
+        seatId: previouslySelectedSeat.id,
+        selectedBy: null,
+        updatedAt: previouslySelectedSeat.updatedAt,
+      });
+
+      fastify.log.info(
+        `Seat ${previouslySelectedSeat.id} selection cancelled by ${socket.id}`
+      );
+    }
+
     if (seat.selectedBy) {
       // 이미 다른 유저가 선택한 좌석
       socket.emit("error", {
