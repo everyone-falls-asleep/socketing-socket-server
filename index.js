@@ -201,6 +201,7 @@ async function getSeatsForRoom(eventId, eventDateId) {
         reservations: [],
         selectedBy: null, // 초기 상태
         updatedAt: null, // 초기 상태
+        expirationTime: null, // 초기 상태
       });
     }
 
@@ -305,11 +306,18 @@ io.on("connection", (socket) => {
       previouslySelectedSeat.selectedBy = null;
       previouslySelectedSeat.updatedAt = currentTime;
 
+      // 타이머가 있다면 취소
+      if (timers.has(previouslySelectedSeat.id)) {
+        clearTimeout(timers.get(previouslySelectedSeat.id));
+        timers.delete(previouslySelectedSeat.id);
+      }
+
       // 같은 room의 유저들에게 상태 변경 브로드캐스트
       io.to(roomName).emit("seatSelected", {
         seatId: previouslySelectedSeat.id,
         selectedBy: null,
         updatedAt: previouslySelectedSeat.updatedAt,
+        expirationTime: null,
       });
 
       fastify.log.info(
@@ -327,7 +335,30 @@ io.on("connection", (socket) => {
       // 선택
       seat.selectedBy = socket.id;
       seat.updatedAt = currentTime;
+      seat.expirationTime = new Date(
+        Date.now() + SELECTION_TIMEOUT
+      ).toISOString();
       fastify.log.info(`Seat ${seatId} selected by ${socket.id}`);
+
+      // 만료 타이머 설정
+      const timer = setTimeout(() => {
+        seat.selectedBy = null;
+        seat.updatedAt = null;
+        seat.expirationTime = null;
+
+        // 상태 변경 브로드캐스트
+        io.to(roomName).emit("seatSelected", {
+          seatId: seat.id,
+          selectedBy: null,
+          updatedAt: null,
+          expirationTime: null,
+        });
+
+        timers.delete(seat.id);
+        fastify.log.info(`Seat ${seat.id} selection expired.`);
+      }, SELECTION_TIMEOUT);
+
+      timers.set(seat.id, timer);
     }
 
     // 같은 room의 유저들에게 상태 변경 브로드캐스트
@@ -335,6 +366,7 @@ io.on("connection", (socket) => {
       seatId,
       selectedBy: seat.selectedBy,
       updatedAt: seat.updatedAt,
+      expirationTime: seat.expirationTime,
     });
   });
 
@@ -463,6 +495,7 @@ io.on("connection", (socket) => {
             seatId: seat.id,
             selectedBy: null,
             updatedAt: currentTime,
+            expirationTime: null,
           });
         }
       });
