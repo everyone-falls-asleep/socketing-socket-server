@@ -493,7 +493,7 @@ io.on("connection", (socket) => {
       seat.expirationTime = new Date(
         Date.now() + SELECTION_TIMEOUT
       ).toISOString();
-      fastify.log.info(`Seat ${seatId} selected by ${socket.id}`);
+      fastify.log.info(`Seat ${seat.id} of an adjacent group selected by ${socket.id}`);
 
       // 만료 타이머 설정
       const timer = setTimeout(() => {
