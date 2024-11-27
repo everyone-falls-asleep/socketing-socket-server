@@ -441,7 +441,7 @@ io.on("connection", (socket) => {
 
     const currentTime = new Date().toISOString();
 
-    // 이전에 선택한 좌석을 찾고 취소
+    // 이전에 선택한 좌석을 찾고 취소 -> 로직 추가되어야 할듯
     const previouslySelectedSeat = seatData[roomName]?.find(
       (s) => s.selectedBy === socket.id
     );
@@ -480,19 +480,26 @@ io.on("connection", (socket) => {
     // 가능한 좌석 찾기
     const adjacentSeats = findAdjacentSeats(seatData[roomName], selectedSeat, numberOfTickets);
     // 가능한 좌석이 요청한 좌석 수보다 적으면 리턴
+    fastify.log.info(adjacentSeats);
     if (adjacentSeats.length < numberOfTickets) {
       socket.emit("error", {
         message: "Not enough adjacent seats available",
       });
+      fastify.log.info("error emitted");
       return;
     }
 
+    const result = [];
     for (const seat of adjacentSeats) {
-      seat.selectedBy = socket.id;
-      seat.updatedAt = currentTime;
-      seat.expirationTime = new Date(
+      result.push({
+        seatId: seat.id,
+        selectedBy: socket.id,
+        updatedAt: currentTime,
+        expirationTime: new Date(
         Date.now() + SELECTION_TIMEOUT
-      ).toISOString();
+      ).toISOString(),
+      })
+      
       fastify.log.info(`Seat ${seat.id} of an adjacent group selected by ${socket.id}`);
 
       // 만료 타이머 설정
@@ -517,9 +524,8 @@ io.on("connection", (socket) => {
     }
 
     // 같은 room의 유저들에게 상태 변경 브로드캐스트
-    io.to(roomName).emit("adjacentSeatsSelected", {
-      adjacentSeats
-    });
+    fastify.log.info("emitted result: ", result);
+    io.to(roomName).emit("adjacentSeatsSelected", result);
   })
 
   socket.on("reserveSeat", async ({ seatId, eventId, eventDateId }) => {
@@ -759,11 +765,11 @@ const findAdjacentSeats = (seats, selectedSeat, numberOfTickets) => {
   const availableSeats = seats.filter(
     (seat) => seat.reservations.length === 0 && seat.selectedBy === null
   )
+  fastify.log.info("number of available seats: ", availableSeats.length);
   // Step 1: same area, same row, 인접 number 
   const sameAreaSameRow = availableSeats.filter(
       (seat) => seat.area === area && seat.row === row
   );
-
   if (sameAreaSameRow.length > 0) {
       const sortedSeats = sortByProximity(number, sameAreaSameRow.map((seat) => seat.number));
       let i = 0;
@@ -776,6 +782,8 @@ const findAdjacentSeats = (seats, selectedSeat, numberOfTickets) => {
         return result;
       }
   }
+  fastify.log.info("step1. same area same row: ", sameAreaSameRow);
+  fastify.log.info("result: ", result);
 
   // Step 2: same area, 인접 row
   const rowsToCheck = [-1, 1]; // (row-1, row+1)
@@ -796,7 +804,6 @@ const findAdjacentSeats = (seats, selectedSeat, numberOfTickets) => {
         }
       }
   }
-
   // Step 3: 인접 area
   const areasToCheck = [area - 1, area + 1]; 
   for (let targetArea of areasToCheck) {
