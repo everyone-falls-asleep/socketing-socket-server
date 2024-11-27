@@ -1,5 +1,6 @@
 import Fastify from "fastify";
 import { Server } from "socket.io";
+import { instrument } from "@socket.io/admin-ui";
 import fastifyEnv from "@fastify/env";
 import cors from "@fastify/cors";
 import fastifyStatic from "@fastify/static";
@@ -88,8 +89,9 @@ await fastify.register(fastifyPostgres, {
 });
 
 await fastify.register(fastifyStatic, {
-  root: join(__dirname, "public"),
-  prefix: "/",
+  root: join(__dirname, "dist"),
+  prefix: "/admin",
+  redirect: true,
 });
 
 fastify.get("/reservation", async (request, reply) => {
@@ -274,9 +276,19 @@ async function getSeatsForRoom(eventId, eventDateId) {
 const io = new Server(fastify.server, {
   cors: {
     origin: "*",
-    methods: ["GET", "POST"],
+    methods: "*",
+    credentials: true,
   },
   transports: ["websocket"],
+});
+
+instrument(io, {
+  auth: {
+    type: "basic",
+    username: "admin",
+    password: "$2a$10$QWUn5UhhE3eSAu2a95fVn.PRVaamlJlJBMeT7viIrvgvfCOeUIV2W",
+  },
+  mode: "development",
 });
 
 // 실시간 서버 시간 브로드캐스트
