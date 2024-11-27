@@ -420,6 +420,108 @@ io.on("connection", (socket) => {
     });
   });
 
+  // 연석 처리
+  socket.on("requestAdjacentSeats", ({ seatId, eventId, eventDateId, numberOfTickets }) => {
+    const roomName = `${eventId}_${eventDateId}`;
+    
+    // 유효성 검사
+    const selectedSeat = seatData[roomName]?.find((s) => s.id === seatId);
+    if (!selectedSeat) {
+      socket.emit("error", { message: "Invalid seat ID." });
+      return;
+    }
+
+    // 이미 예매된 좌석인지 확인
+    if (selectedSeat.reservations.length !== 0) {
+      socket.emit("error", {
+        message: "Seat is reserved and cannot be selected.",
+      });
+      return;
+    }
+
+    const currentTime = new Date().toISOString();
+
+    // 이전에 선택한 좌석을 찾고 취소
+    const previouslySelectedSeat = seatData[roomName]?.find(
+      (s) => s.selectedBy === socket.id
+    );
+    if (previouslySelectedSeat) {
+      // 선택 취소
+      previouslySelectedSeat.selectedBy = null;
+      previouslySelectedSeat.updatedAt = currentTime;
+
+      // 타이머가 있다면 취소
+      if (timers.has(previouslySelectedSeat.id)) {
+        clearTimeout(timers.get(previouslySelectedSeat.id));
+        timers.delete(previouslySelectedSeat.id);
+      }
+
+      // 같은 room의 유저들에게 상태 변경 브로드캐스트
+      io.to(roomName).emit("seatSelected", {
+        seatId: previouslySelectedSeat.id,
+        selectedBy: null,
+        updatedAt: previouslySelectedSeat.updatedAt,
+        expirationTime: null,
+      });
+
+      fastify.log.info(
+        `Seat ${previouslySelectedSeat.id} selection cancelled by ${socket.id}`
+      );
+    }
+
+    if (selectedSeat.selectedBy) {
+      // 이미 다른 유저가 선택한 좌석
+      socket.emit("error", {
+        message: "Seat is already selected by another user.",
+      });
+      return;
+    }
+
+    // 가능한 좌석 찾기
+    const adjacentSeats = findAdjacentSeats(seatData[roomName], selectedSeat, numberOfTickets);
+    // 가능한 좌석이 요청한 좌석 수보다 적으면 리턴
+    if (adjacentSeats.length < numberOfTickets) {
+      socket.emit("error", {
+        message: "Not enough adjacent seats available",
+      });
+      return;
+    }
+
+    for (const seat of adjacentSeats) {
+      seat.selectedBy = socket.id;
+      seat.updatedAt = currentTime;
+      seat.expirationTime = new Date(
+        Date.now() + SELECTION_TIMEOUT
+      ).toISOString();
+      fastify.log.info(`Seat ${seatId} selected by ${socket.id}`);
+
+      // 만료 타이머 설정
+      const timer = setTimeout(() => {
+        seat.selectedBy = null;
+        seat.updatedAt = null;
+        seat.expirationTime = null;
+
+        // 상태 변경 브로드캐스트
+        io.to(roomName).emit("seatSelected", {
+          seatId: seat.id,
+          selectedBy: null,
+          updatedAt: new Date().toISOString(),
+          expirationTime: null,
+        });
+
+        timers.delete(seat.id);
+        fastify.log.info(`Seat ${seat.id} selection expired.`);
+      }, SELECTION_TIMEOUT);
+
+      timers.set(seat.id, timer);
+    }
+
+    // 같은 room의 유저들에게 상태 변경 브로드캐스트
+    io.to(roomName).emit("adjacentSeatsSelected", {
+      adjacentSeats
+    });
+  })
+
   socket.on("reserveSeat", async ({ seatId, eventId, eventDateId }) => {
     try {
       const reservationInfo = await getSeatReservationStatus(
@@ -640,6 +742,82 @@ io.on("connection", (socket) => {
     checkAndClearRoomData(roomName);
   });
 });
+
+const findAdjacentSeats = (seats, selectedSeat, numberOfTickets) => {
+  
+  const area = selectedSeat.area;
+  const row = selectedSeat.row;
+  const number = selectedSeat.number;
+  const result = [selectedSeat];
+
+  // target과 가까운 순으로 정렬하는 함수
+  function sortByProximity(target, seatNumbers) {
+      return seatNumbers.sort((a, b) => Math.abs(a - target) - Math.abs(b - target));
+  }
+  
+  // Step 0: 예약된 좌석과 선택된 좌석 필터링
+  const availableSeats = seats.filter(
+    (seat) => seat.reservations.length === 0 && seat.selectedBy === null
+  )
+  // Step 1: same area, same row, 인접 number 
+  const sameAreaSameRow = availableSeats.filter(
+      (seat) => seat.area === area && seat.row === row
+  );
+
+  if (sameAreaSameRow.length > 0) {
+      const sortedSeats = sortByProximity(number, sameAreaSameRow.map((seat) => seat.number));
+      let i = 0;
+      while (result.length < numberOfTickets && i < sortedSeats.length) {
+        result.push(sameAreaSameRow.find((seat) => seat.number === sortedSeats[i]));
+        i += 1;
+      }
+      // result.push(sameAreaSameRow.find((seat) => seat.number === sortedSeats[0]));
+      if (result.length >= numberOfTickets) {
+        return result;
+      }
+  }
+
+  // Step 2: same area, 인접 row
+  const rowsToCheck = [-1, 1]; // (row-1, row+1)
+  for (let relativeRow of rowsToCheck) {
+      const targetRow = row + relativeRow;
+      const sameAreaAdjacentRow = availableSeats.filter(
+          (seat) => seat.area === area && seat.row === targetRow 
+      );
+      if (sameAreaAdjacentRow.length > 0) {
+        const sortedSeats = sortByProximity(number, sameAreaAdjacentRow.map((seat) => seat.number));
+        let i = 0;
+        while (result.length < numberOfTickets && i < sortedSeats.length) {
+          result.push(sameAreaAdjacentRow.find((seat) => seat.number === sortedSeats[i]));
+          i += 1;
+        }
+        if (result.length >= numberOfTickets) {
+          return result;
+        }
+      }
+  }
+
+  // Step 3: 인접 area
+  const areasToCheck = [area - 1, area + 1]; 
+  for (let targetArea of areasToCheck) {
+      const sameAreaAllRows = availableSeats.filter(
+          (seat) => seat.area === targetArea && Math.abs(seat.row - row) <= 1
+      );
+      if (sameAreaAllRows.length > 0) {
+        const sortedSeats = sortByProximity(number, sameAreaAllRows.map((seat) => seat.number));
+        let i = 0;
+        while (result.length < numberOfTickets && i < sortedSeats.length) {
+          result.push(sameAreaAllRows.find((seat) => seat.number === sortedSeats[i]));
+          i += 1;
+        }
+        if (result.length >= numberOfTickets) {
+          return result;
+        }
+      }
+  }
+
+  return result;
+}
 
 const startServer = async () => {
   try {
