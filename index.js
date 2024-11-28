@@ -1,6 +1,7 @@
 import Fastify from "fastify";
 import { Server } from "socket.io";
 import { instrument } from "@socket.io/admin-ui";
+import jwt from "jsonwebtoken";
 import fastifyEnv from "@fastify/env";
 import cors from "@fastify/cors";
 import fastifyStatic from "@fastify/static";
@@ -45,9 +46,12 @@ generateRandomCircles();
 
 const schema = {
   type: "object",
-  required: ["PORT", "CACHE_HOST", "CACHE_PORT", "DB_URL"],
+  required: ["PORT", "JWT_SECRET", "CACHE_HOST", "CACHE_PORT", "DB_URL"],
   properties: {
     PORT: {
+      type: "string",
+    },
+    JWT_SECRET: {
       type: "string",
     },
     CACHE_HOST: {
@@ -300,6 +304,22 @@ setInterval(() => {
 const messageHistory = [];
 const connectedUsers = new Map();
 const seatData = {}; // Room별 좌석 정보를 저장하는 객체
+
+io.use((socket, next) => {
+  const token = socket.handshake.auth.token;
+
+  if (!token) {
+    return next(new Error("Authentication error"));
+  }
+
+  try {
+    const decoded = jwt.verify(token, fastify.config.JWT_SECRET);
+    socket.data.user = decoded;
+    next();
+  } catch (err) {
+    return next(new Error("Authentication error"));
+  }
+});
 
 io.on("connection", (socket) => {
   fastify.log.info(`New client connected: ${socket.id}`);
