@@ -534,11 +534,11 @@ io.on("connection", (socket) => {
   });
 
   // 연석 처리
-  socket.on("requestAdjacentSeats", ({ seatId, eventId, eventDateId, numberOfSeats }) => {
+  socket.on("requestAdjacentSeats", async ({ seatId, eventId,eventDateId, numberOfSeats }) => {
     const roomName = `${eventId}_${eventDateId}`;
     
-    // 유효성 검사
-    const selectedSeat = seatData[roomName]?.find((s) => s.id === seatId);
+    // Redis에서 좌석 정보 조회
+    let selectedSeat = await getSeatFromRedis(roomName, seatId);
     if (!selectedSeat) {
       socket.emit("error", { message: "Invalid seat ID." });
       return;
@@ -555,40 +555,34 @@ io.on("connection", (socket) => {
     const currentTime = new Date().toISOString();
 
     // 이전에 선택한 좌석들을 찾고 취소
-    const previouslySelectedSeats = Object.values(seatData[roomName]).filter(
-      (s) => s.selectedBy === socket.id
-    );
-    if (previouslySelectedSeats && previouslySelectedSeats.length > 0) {
-      // numberOfSeats 개수만큼 
-      for (let i = 0; i < Math.min(previouslySelectedSeats.length, numberOfSeats); i++) {
-        const seat = previouslySelectedSeats[i];
+    const allSeats = await getAllSeatsFromRedis(roomName);
+    for (const s of allSeats) {
+      if (s.selectedBy === socket.id) {
+        s.selectedBy = null;
+        s.updatedAt = currentTime;
+        s.expirationTime = null;
 
-        // 선택 취소
-        seat.selectedBy = null;
-        seat.updatedAt = currentTime;
+        // Redis 만료 키 제거
+        await fastify.redis.del(`timer:${roomName}:${s.id}`);
 
-        // 타이머가 있다면 취소
-        if (timers.has(seat.id)) {
-          clearTimeout(timers.get(seat.id));
-          timers.delete(seat.id);
-        }
+        // Redis 업데이트
+        await updateSeatInRedis(roomName, s.id, s);
 
         // 같은 room의 유저들에게 상태 변경 브로드캐스트
         io.to(roomName).emit("seatSelected", {
-          seatId: seat.id,
+          seatId: s.id,
           selectedBy: null,
-          updatedAt: seat.updatedAt,
+          updatedAt: s.updatedAt,
           expirationTime: null,
         });
 
-        fastify.log.info(
-          `Seat ${seat.id} selection cancelled by ${socket.id}`
-        );
+        fastify.log.info(`Seat ${s.id} selection cancelled by ${socket.id}`);
       }
     }
 
-    if (selectedSeat.selectedBy) {
-      // 이미 다른 유저가 선택한 좌석
+    // 이미 다른 유저가 선택한 좌석인지 확인
+    const expired = await isSeatExpired(roomName, seatId);
+    if (selectedSeat.selectedBy && !expired) {
       socket.emit("error", {
         message: "Seat is already selected by another user.",
       });
@@ -596,7 +590,7 @@ io.on("connection", (socket) => {
     }
 
     // 가능한 좌석 찾기
-    const adjacentSeats = findAdjacentSeats(seatData[roomName], selectedSeat, numberOfSeats);
+    const adjacentSeats = findAdjacentSeats(allSeats, selectedSeat, numberOfSeats);
     // 가능한 좌석이 요청한 좌석 수보다 적으면 리턴
     if (adjacentSeats.length < numberOfSeats) {
       socket.emit("error", {
@@ -609,7 +603,7 @@ io.on("connection", (socket) => {
     for (const seat of adjacentSeats) {
 
       // 선택될 좌석 상태 변경
-      const targetSeat = seatData[roomName].find((s) => s.id === seat.id);
+      const targetSeat = allSeats.find((s) => s.id === seat.id);
       if (targetSeat) {
         targetSeat.selectedBy = socket.id;
         targetSeat.updatedAt = currentTime;
@@ -627,25 +621,8 @@ io.on("connection", (socket) => {
       
       fastify.log.info(`Seat ${seat.id} of an adjacent group selected by ${socket.id}`);
 
-      // 만료 타이머 설정
-      const timer = setTimeout(() => {
-        seat.selectedBy = null;
-        seat.updatedAt = null;
-        seat.expirationTime = null;
-
-        // 상태 변경 브로드캐스트
-        io.to(roomName).emit("seatSelected", {
-          seatId: seat.id,
-          selectedBy: null,
-          updatedAt: new Date().toISOString(),
-          expirationTime: null,
-        });
-
-        timers.delete(seat.id);
-        fastify.log.info(`Seat ${seat.id} selection expired.`);
-      }, SELECTION_TIMEOUT);
-
-      timers.set(seat.id, timer);
+      await updateSeatInRedis(roomName, targetSeat.id, targetSeat);
+      await setSeatExpirationInRedis(roomName, targetSeat.id);
     }
 
     // 같은 room의 유저들에게 상태 변경 브로드캐스트
@@ -757,16 +734,15 @@ const findAdjacentSeats = (seats, selectedSeat, numberOfSeats) => {
   const selectedRow = selectedSeat.row;
   const selectedNumber = selectedSeat.number;
 
-  // step 0: 예약되지 않은 좌석들과 선택되지 않은 좌석들만 필터링
+  // 예약되지 않은 좌석들과 선택되지 않은 좌석들만 필터링
   const availableSeats = seats.filter(
     (seat) => seat.reservations.length === 0 && seat.selectedBy === null
   );
 
   const result = [selectedSeat]; // 처음 선택한 좌석은 항상 포함
 
-  
-  // step 1: 같은 행(row)에서 좌석 찾기
   let offset = 1;
+  // 같은 행(row)에서 좌석 찾기
   while (result.length < numberOfSeats) {
     // 현재 offset에 따라 왼쪽과 오른쪽 좌석 번호 계산
     const positions = [
@@ -784,8 +760,8 @@ const findAdjacentSeats = (seats, selectedSeat, numberOfSeats) => {
         (s) =>
           s.area === area && // 같은 구역인지 확인
           s.row === pos.row && // 같은 행인지 확인
-          s.number === pos.number // 해당 좌석 번호인지 확인
-          // !result.includes(s) // 이미 선택된 좌석이 아닌지 확인
+          s.number === pos.number && // 해당 좌석 번호인지 확인
+          !result.includes(s) // 이미 선택된 좌석이 아닌지 확인
       );
 
       if (seat) {
@@ -799,7 +775,7 @@ const findAdjacentSeats = (seats, selectedSeat, numberOfSeats) => {
     offset++;
   }
 
-  // step 2: 같은 행에서 충분한 좌석을 찾지 못한 경우, 다른 행에서 좌석 찾기
+  // 같은 행에서 충분한 좌석을 찾지 못한 경우, 다른 행에서 좌석 찾기
   if (result.length < numberOfSeats) {
     // 동일한 구역(area) 내의 모든 행(row) 가져오기
     const rowsInArea = [...new Set(
