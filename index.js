@@ -1,5 +1,7 @@
 import Fastify from "fastify";
+import { Redis } from "ioredis";
 import { Server } from "socket.io";
+import { createAdapter } from "@socket.io/redis-adapter";
 import { instrument } from "@socket.io/admin-ui";
 import jwt from "jsonwebtoken";
 import fastifyEnv from "@fastify/env";
@@ -11,7 +13,6 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const SELECTION_TIMEOUT = 10 * 1000; // 선택 만료 시간: 10초
-const timers = new Map();
 
 const schema = {
   type: "object",
@@ -246,6 +247,130 @@ async function getSeatsForRoom(eventId, eventDateId) {
   return Array.from(seatMap.values());
 }
 
+// Redis에서 좌석 정보를 저장
+async function setSeatDataInRedis(roomName, seatData) {
+  await fastify.redis.set(`seatData:${roomName}`, JSON.stringify(seatData));
+}
+
+// 좌석 선택 상태를 Redis에 저장
+async function updateSeatInRedis(roomName, seatId, seat) {
+  await fastify.redis.hset(`seats:${roomName}`, seatId, JSON.stringify(seat));
+}
+
+// Redis에서 좌석 선택 상태 가져오기
+async function getSeatFromRedis(roomName, seatId) {
+  const seatData = await fastify.redis.hget(`seats:${roomName}`, seatId);
+  return seatData ? JSON.parse(seatData) : null;
+}
+
+// Redis에서 모든 좌석 가져오기
+async function getAllSeatsFromRedis(roomName) {
+  const seatsData = await fastify.redis.hgetall(`seats:${roomName}`);
+  const seats = [];
+  for (const seatId in seatsData) {
+    seats.push(JSON.parse(seatsData[seatId]));
+  }
+  return seats;
+}
+
+// 좌석 선택 만료를 Redis에서 설정
+async function setSeatExpirationInRedis(roomName, seatId) {
+  // 만료 시간을 설정하여 키를 설정
+  await fastify.redis.set(
+    `timer:${roomName}:${seatId}`,
+    "active",
+    "PX",
+    SELECTION_TIMEOUT
+  );
+}
+
+// Redis에서 좌석 선택 만료 확인
+async function isSeatExpired(roomName, seatId) {
+  const status = await fastify.redis.exists(`timer:${roomName}:${seatId}`);
+  return !status; // 존재하지 않으면 만료됨
+}
+
+// Redis Keyspace Notifications를 위한 Subscriber 설정
+const redisSubscriber = fastify.redis.duplicate();
+// await redisSubscriber.connect();
+
+// Redis Keyspace Notifications 설정
+await redisSubscriber.config("SET", "notify-keyspace-events", "Ex");
+
+// 만료 이벤트 패턴 구독
+const pattern = `__keyevent@${fastify.redis.options.db || 0}__:expired`;
+
+redisSubscriber.psubscribe(pattern, (err, count) => {
+  if (err) {
+    fastify.log.error("Failed to subscribe to pattern:", err);
+  } else {
+    fastify.log.info(
+      `Successfully subscribed to pattern: ${pattern}, subscription count: ${count}`
+    );
+  }
+});
+
+// 패턴 메시지 이벤트 리스너 설정
+redisSubscriber.on("pmessage", async (pattern, channel, message) => {
+  const keyParts = message.split(":");
+  if (keyParts[0] === "timer") {
+    const roomName = keyParts[1];
+    const seatId = keyParts[2];
+
+    await handleExpirationEvent(roomName, seatId);
+  }
+});
+
+// Redis 잠금을 사용하여 이벤트 중복 방지
+const handleExpirationEvent = async (roomName, seatId) => {
+  const lockKey = `lock:seat:${roomName}:${seatId}`;
+
+  // 잠금을 설정하고 기존에 잠금이 없었을 경우에만 처리
+  const lockAcquired = await fastify.redis.set(
+    lockKey,
+    "locked",
+    "NX",
+    "EX",
+    10
+  );
+  if (!lockAcquired) {
+    fastify.log.info(`Another process is already handling this: ${lockKey}`);
+    return; // 다른 프로세스가 이미 처리 중
+  }
+
+  try {
+    // 좌석 정보 처리 로직
+    const seat = await getSeatFromRedis(roomName, seatId);
+    if (seat) {
+      seat.selectedBy = null;
+      seat.updatedAt = new Date().toISOString();
+      seat.expirationTime = null;
+
+      await updateSeatInRedis(roomName, seatId, seat);
+
+      io.to(roomName).emit("seatSelected", {
+        seatId: seat.id,
+        selectedBy: null,
+        updatedAt: seat.updatedAt,
+        expirationTime: null,
+      });
+
+      fastify.log.info(
+        `Selection for seat ${seatId} has expired (room: ${roomName}).`
+      );
+    }
+  } finally {
+    // 잠금 해제
+    await fastify.redis.del(lockKey);
+  }
+};
+
+const pubClient = new Redis({
+  host: fastify.config.CACHE_HOST,
+  port: fastify.config.CACHE_PORT,
+});
+const subClient = pubClient.duplicate();
+
 const io = new Server(fastify.server, {
   cors: {
     origin: "*",
@@ -254,6 +379,8 @@ const io = new Server(fastify.server, {
   },
   transports: ["websocket"],
 });
+
+io.adapter(createAdapter(pubClient, subClient));
 
 instrument(io, {
   auth: {
@@ -308,14 +435,21 @@ io.on("connection", (socket) => {
 
     try {
       // 좌석 정보 생성 또는 가져오기
-      if (!seatData[roomName]) {
-        seatData[roomName] = await getSeatsForRoom(eventId, eventDateId); // DB에서 가져오기
+      let seats = await getAllSeatsFromRedis(roomName);
+      if (seats.length === 0) {
+        seats = await getSeatsForRoom(eventId, eventDateId); // DB에서 가져오기
+
+        // Redis에 저장
+        for (const seat of seats) {
+          await updateSeatInRedis(roomName, seat.id, seat);
+        }
+        await setSeatDataInRedis(roomName, seats);
       }
 
       // 클라이언트에게 데이터 전송
       socket.emit("roomJoined", {
         message: `You have joined the room: ${roomName}`,
-        seats: seatData[roomName],
+        seats,
       });
     } catch (error) {
       fastify.log.error(`Error fetching data for room ${roomName}:`, error);
@@ -326,11 +460,11 @@ io.on("connection", (socket) => {
   });
 
   // 좌석 선택 처리
-  socket.on("selectSeat", ({ seatId, eventId, eventDateId }) => {
+  socket.on("selectSeat", async ({ seatId, eventId, eventDateId }) => {
     const roomName = `${eventId}_${eventDateId}`;
 
-    // 유효성 검사
-    const seat = seatData[roomName]?.find((s) => s.id === seatId);
+    // Redis에서 좌석 정보 조회
+    let seat = await getSeatFromRedis(roomName, seatId);
     if (!seat) {
       socket.emit("error", { message: "Invalid seat ID." });
       return;
@@ -347,68 +481,50 @@ io.on("connection", (socket) => {
     const currentTime = new Date().toISOString();
 
     // 이전에 선택한 좌석을 찾고 취소
-    const previouslySelectedSeat = seatData[roomName]?.find(
-      (s) => s.selectedBy === socket.id
-    );
-    if (previouslySelectedSeat) {
-      // 선택 취소
-      previouslySelectedSeat.selectedBy = null;
-      previouslySelectedSeat.updatedAt = currentTime;
+    const allSeats = await getAllSeatsFromRedis(roomName);
+    for (const s of allSeats) {
+      if (s.selectedBy === socket.id && s.id !== seatId) {
+        s.selectedBy = null;
+        s.updatedAt = currentTime;
+        s.expirationTime = null;
 
-      // 타이머가 있다면 취소
-      if (timers.has(previouslySelectedSeat.id)) {
-        clearTimeout(timers.get(previouslySelectedSeat.id));
-        timers.delete(previouslySelectedSeat.id);
+        // Redis 만료 키 제거
+        await fastify.redis.del(`timer:${roomName}:${s.id}`);
+
+        // Redis 업데이트
+        await updateSeatInRedis(roomName, s.id, s);
+
+        // 같은 room의 유저들에게 상태 변경 브로드캐스트
+        io.to(roomName).emit("seatSelected", {
+          seatId: s.id,
+          selectedBy: null,
+          updatedAt: s.updatedAt,
+          expirationTime: null,
+        });
+
+        fastify.log.info(`Seat ${s.id} selection cancelled by ${socket.id}`);
       }
-
-      // 같은 room의 유저들에게 상태 변경 브로드캐스트
-      io.to(roomName).emit("seatSelected", {
-        seatId: previouslySelectedSeat.id,
-        selectedBy: null,
-        updatedAt: previouslySelectedSeat.updatedAt,
-        expirationTime: null,
-      });
-
-      fastify.log.info(
-        `Seat ${previouslySelectedSeat.id} selection cancelled by ${socket.id}`
-      );
     }
 
-    if (seat.selectedBy) {
-      // 이미 다른 유저가 선택한 좌석
+    // 이미 다른 유저가 선택한 좌석인지 확인
+    const expired = await isSeatExpired(roomName, seatId);
+    if (seat.selectedBy && !expired) {
       socket.emit("error", {
         message: "Seat is already selected by another user.",
       });
       return;
-    } else {
-      // 선택
-      seat.selectedBy = socket.id;
-      seat.updatedAt = currentTime;
-      seat.expirationTime = new Date(
-        Date.now() + SELECTION_TIMEOUT
-      ).toISOString();
-      fastify.log.info(`Seat ${seatId} selected by ${socket.id}`);
-
-      // 만료 타이머 설정
-      const timer = setTimeout(() => {
-        seat.selectedBy = null;
-        seat.updatedAt = null;
-        seat.expirationTime = null;
-
-        // 상태 변경 브로드캐스트
-        io.to(roomName).emit("seatSelected", {
-          seatId: seat.id,
-          selectedBy: null,
-          updatedAt: new Date().toISOString(),
-          expirationTime: null,
-        });
-
-        timers.delete(seat.id);
-        fastify.log.info(`Seat ${seat.id} selection expired.`);
-      }, SELECTION_TIMEOUT);
-
-      timers.set(seat.id, timer);
     }
+
+    // 선택
+    seat.selectedBy = socket.id;
+    seat.updatedAt = currentTime;
+    seat.expirationTime = new Date(
+      Date.now() + SELECTION_TIMEOUT
+    ).toISOString();
+
+    // Redis 업데이트
+    await updateSeatInRedis(roomName, seatId, seat);
+    await setSeatExpirationInRedis(roomName, seatId);
 
     // 같은 room의 유저들에게 상태 변경 브로드캐스트
     io.to(roomName).emit("seatSelected", {
@@ -417,6 +533,8 @@ io.on("connection", (socket) => {
       updatedAt: seat.updatedAt,
       expirationTime: seat.expirationTime,
     });
+
+    fastify.log.info(`Seat ${seatId} selected by ${socket.id}`);
   });
 
   socket.on("reserveSeat", async ({ seatId, eventId, eventDateId }) => {
@@ -436,25 +554,19 @@ io.on("connection", (socket) => {
 
       const roomName = `${eventId}_${eventDateId}`;
 
-      // 유효성 검사
-      const seat = seatData[roomName]?.find((s) => s.id === reservationInfo.id);
+      // Redis에서 좌석 정보 조회
+      let seat = await getSeatFromRedis(roomName, seatId);
       if (!seat) {
         socket.emit("error", { message: "Invalid seat ID." });
         return;
       }
 
       // 좌석이 이미 예약되었는지 확인
-      if (seat.reservedBy || seat.reservations.length > 0) {
+      if (seat.reservations.length > 0) {
         socket.emit("error", {
           message: "Seat is already reserved by another user.",
         });
         return;
-      }
-
-      // 타이머가 있다면 취소
-      if (timers.has(seat.id)) {
-        clearTimeout(timers.get(seat.id));
-        timers.delete(seat.id);
       }
 
       const currentTime = new Date().toISOString();
@@ -464,6 +576,9 @@ io.on("connection", (socket) => {
       seat.expirationTime = null;
       seat.reservedBy = socket.id;
       seat.reservations = reservationInfo.reservations;
+
+      // Redis 업데이트
+      await updateSeatInRedis(roomName, seatId, seat);
 
       // 같은 room의 유저들에게 상태 변경 브로드캐스트
       io.to(roomName).emit("seatSelected", {
@@ -486,46 +601,39 @@ io.on("connection", (socket) => {
     }
   });
 
-  socket.on("disconnect", () => {
+  socket.on("disconnect", async () => {
     fastify.log.info(`Client disconnected: ${socket.id}`);
 
-    // 연결 해제된 유저가 선택한 좌석 초기화
-    for (const roomName in seatData) {
-      seatData[roomName].forEach((seat) => {
+    // 모든 room에 대해 좌석 선택 초기화
+    const rooms = Array.from(socket.rooms).filter((room) => room !== socket.id);
+    for (const roomName of rooms) {
+      const allSeats = await getAllSeatsFromRedis(roomName);
+      for (const seat of allSeats) {
         if (seat.selectedBy === socket.id) {
-          const currentTime = new Date().toISOString();
           seat.selectedBy = null;
-          seat.updatedAt = currentTime;
+          seat.updatedAt = new Date().toISOString();
+          seat.expirationTime = null;
+
+          // Redis 업데이트
+          await updateSeatInRedis(roomName, seat.id, seat);
+
+          // 같은 room의 유저들에게 상태 변경 브로드캐스트
           io.to(roomName).emit("seatSelected", {
             seatId: seat.id,
             selectedBy: null,
-            updatedAt: currentTime,
+            updatedAt: seat.updatedAt,
             expirationTime: null,
           });
         }
-      });
-      // 모든 클라이언트가 떠났는지 확인 후 데이터 비우기
-      checkAndClearRoomData(roomName);
+      }
     }
   });
-
-  // Room의 클라이언트 연결 상태 확인 및 데이터 비우기
-  const checkAndClearRoomData = (roomName) => {
-    const room = io.sockets.adapter.rooms.get(roomName);
-    if (!room || room.size === 0) {
-      delete seatData[roomName];
-      fastify.log.info(`Room ${roomName} is now empty. Cleared seat data.`);
-    }
-  };
 
   // 클라이언트가 room을 떠날 때 처리
   socket.on("leaveRoom", ({ eventId, eventDateId }) => {
     const roomName = `${eventId}_${eventDateId}`;
     socket.leave(roomName);
     fastify.log.info(`Client ${socket.id} left room: ${roomName}`);
-
-    // 모든 클라이언트가 떠났는지 확인 후 데이터 비우기
-    checkAndClearRoomData(roomName);
   });
 });
 
