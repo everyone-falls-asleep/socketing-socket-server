@@ -1,5 +1,4 @@
 import Fastify from "fastify";
-import { Redis } from "ioredis";
 import { Server } from "socket.io";
 import { createAdapter } from "@socket.io/redis-adapter";
 import { instrument } from "@socket.io/admin-ui";
@@ -365,11 +364,8 @@ const handleExpirationEvent = async (roomName, seatId) => {
   }
 };
 
-const pubClient = new Redis({
-  host: fastify.config.CACHE_HOST,
-  port: fastify.config.CACHE_PORT,
-});
-const subClient = pubClient.duplicate();
+const pubClient = fastify.redis.duplicate();
+const subClient = fastify.redis.duplicate();
 
 const io = new Server(fastify.server, {
   cors: {
