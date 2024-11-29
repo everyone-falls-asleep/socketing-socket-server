@@ -773,68 +773,123 @@ io.on("connection", (socket) => {
 });
 
 const findAdjacentSeats = (seats, selectedSeat, numberOfSeats) => {
-  
   const area = selectedSeat.area;
-  const row = selectedSeat.row;
-  const number = selectedSeat.number;
-  const result = [];
+  const selectedRow = selectedSeat.row;
+  const selectedNumber = selectedSeat.number;
 
-  // target과 가까운 순으로 정렬하는 함수
-  function sortByProximity(target, seatNumbers) {
-      return seatNumbers.sort((a, b) => Math.abs(a - target) - Math.abs(b - target));
-  }
-  
-  // Step 0: 예약되지 않은 좌석과 선택되지 않은 좌석만 필터링
+  // step 0: 예약되지 않은 좌석들과 선택되지 않은 좌석들만 필터링
   const availableSeats = seats.filter(
     (seat) => seat.reservations.length === 0 && seat.selectedBy === null
-  )
+  );
 
-  // 필터링 및 좌석 찾기 공통 로직
-  function findSeatsInRange(filterCondition) {
-    
-    // 필터 조건에 맞는 좌석 찾기
-    const matchingSeats = availableSeats.filter(filterCondition);
-    
-    if (matchingSeats.length > 0) {
-      const sortedSeats = sortByProximity(number, matchingSeats.map((seat) => seat.number));
-      
-      for (const seatNumber of sortedSeats) {
-      const seat = matchingSeats.find((seat) => seat.number === seatNumber);
-      
-      if (seat && !result.includes(seat)) {
-        result.push(seat);
+  const result = [selectedSeat]; // 처음 선택한 좌석은 항상 포함
+
+  
+  // step 1: 같은 행(row)에서 좌석 찾기
+  let offset = 1;
+  while (result.length < numberOfSeats) {
+    // 현재 offset에 따라 왼쪽과 오른쪽 좌석 번호 계산
+    const positions = [
+      { row: selectedRow, number: selectedNumber + offset }, // 오른쪽 좌석
+      { row: selectedRow, number: selectedNumber - offset }, // 왼쪽 좌석
+    ];
+
+    let seatFound = false;
+
+    for (const pos of positions) {
+      if (result.length >= numberOfSeats) break;
+
+      // 해당 위치에 좌석이 있는지 확인
+      const seat = availableSeats.find(
+        (s) =>
+          s.area === area && // 같은 구역인지 확인
+          s.row === pos.row && // 같은 행인지 확인
+          s.number === pos.number // 해당 좌석 번호인지 확인
+          // !result.includes(s) // 이미 선택된 좌석이 아닌지 확인
+      );
+
+      if (seat) {
+        result.push(seat); // 좌석을 결과에 추가
+        seatFound = true;
       }
-      
-      if (result.length >= numberOfSeats) {
-        return true;
+    }
+
+    if (!seatFound) break; // 더 이상 좌석을 찾지 못하면 종료
+
+    offset++;
+  }
+
+  // step 2: 같은 행에서 충분한 좌석을 찾지 못한 경우, 다른 행에서 좌석 찾기
+  if (result.length < numberOfSeats) {
+    // 동일한 구역(area) 내의 모든 행(row) 가져오기
+    const rowsInArea = [...new Set(
+      availableSeats
+        .filter(seat => seat.area === area)
+        .map(seat => seat.row)
+    )];
+
+    // 현재 행을 제외하고, 행 번호의 차이에 따라 가까운 순서대로 정렬
+    const sortedRows = rowsInArea
+      .filter(r => r !== selectedRow)
+      .sort((a, b) => Math.abs(a - selectedRow) - Math.abs(b - selectedRow));
+
+    for (const row of sortedRows) {
+      if (result.length >= numberOfSeats) break;
+
+      offset = 0;
+      while (result.length < numberOfSeats) {
+        // 현재 offset에 따라 좌석 번호 계산
+        const positions = [
+          { row: row, number: selectedNumber + offset }, // 오른쪽 좌석
+          { row: row, number: selectedNumber - offset }, // 왼쪽 좌석
+        ];
+
+        let seatFound = false;
+
+        for (const pos of positions) {
+          if (result.length >= numberOfSeats) break;
+
+          // 해당 위치에 좌석이 있는지 확인
+          const seat = availableSeats.find(
+            (s) =>
+              s.area === area && // 같은 구역인지 확인
+              s.row === pos.row && // 해당 행인지 확인
+              s.number === pos.number && // 해당 좌석 번호인지 확인
+              !result.includes(s) // 이미 선택된 좌석이 아닌지 확인
+          );
+
+          if (seat) {
+            result.push(seat); // 좌석을 결과에 추가
+            seatFound = true;
+          }
+        }
+
+        if (!seatFound) break; // 더 이상 좌석을 찾지 못하면 종료
+
+        offset++;
       }
     }
-    return false;
+  }
+
+  // 아직도 좌석을 다 찾지 못한 경우, 동일한 구역 내의 다른 좌석들을 추가
+  if (result.length < numberOfSeats) {
+    // 남은 좌석들을 거리 순으로 정렬
+    const remainingSeats = availableSeats
+      .filter(seat => seat.area === area && !result.includes(seat))
+      .sort((a, b) => {
+        const rowDiff = Math.abs(a.row - selectedRow) - Math.abs(b.row - selectedRow);
+        if (rowDiff !== 0) return rowDiff;
+        return Math.abs(a.number - selectedNumber) - Math.abs(b.number - selectedNumber);
+      });
+
+    for (const seat of remainingSeats) {
+      if (result.length >= numberOfSeats) break;
+      result.push(seat); // 좌석을 결과에 추가
     }
   }
 
-  // Step 1: same area, same row
-  if (findSeatsInRange(seat => seat.area === area && seat.row === row)) {
-    return result;
-  }
-
-  // Step 2: same area, 인접 row
-  const rowsToCheck = [row - 1, row + 1];
-  for (let targetRow of rowsToCheck) {
-    if (findSeatsInRange(seat => seat.area === area && seat.row === targetRow)) {
-      return result;
-    }
-  }
-
-  // Step 3: 인접 area
-  const areasToCheck = [area - 1, area + 1]; 
-  for (let targetArea of areasToCheck) {
-    if (findSeatsInRange(seat => seat.area === targetArea && Math.abs(seat.row - row) <= 1)) {
-      return result;
-    }
-  }
-  return result;
-}
+  return result; // 최종 좌석 리스트 반환
+};
 
 const startServer = async () => {
   try {
