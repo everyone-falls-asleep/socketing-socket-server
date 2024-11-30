@@ -8,6 +8,7 @@ import cors from "@fastify/cors";
 import fastifyStatic from "@fastify/static";
 import fastifyRedis from "@fastify/redis";
 import fastifyPostgres from "@fastify/postgres";
+import fastifyRabbit from "fastify-rabbitmq";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -15,7 +16,14 @@ const SELECTION_TIMEOUT = 10 * 1000; // 선택 만료 시간: 10초
 
 const schema = {
   type: "object",
-  required: ["PORT", "JWT_SECRET", "CACHE_HOST", "CACHE_PORT", "DB_URL"],
+  required: [
+    "PORT",
+    "JWT_SECRET",
+    "CACHE_HOST",
+    "CACHE_PORT",
+    "DB_URL",
+    "MQ_URL",
+  ],
   properties: {
     PORT: {
       type: "string",
@@ -30,6 +38,9 @@ const schema = {
       type: "integer",
     },
     DB_URL: {
+      type: "string",
+    },
+    MQ_URL: {
       type: "string",
     },
   },
@@ -61,6 +72,10 @@ await fastify.register(fastifyPostgres, {
   connectionString: fastify.config.DB_URL,
 });
 
+await fastify.register(fastifyRabbit, {
+  connection: fastify.config.MQ_URL,
+});
+
 await fastify.register(fastifyStatic, {
   root: join(__dirname, "dist"),
   prefix: "/admin",
@@ -79,6 +94,7 @@ fastify.get("/readiness", async (request, reply) => {
   try {
     let redisStatus = { status: "disconnected", message: "" };
     let dbStatus = { status: "disconnected", message: "" };
+    let rabbitStatus = { status: "disconnected", message: "" };
 
     // Redis 상태 확인
     try {
@@ -106,13 +122,32 @@ fastify.get("/readiness", async (request, reply) => {
       dbStatus.message = `PostgreSQL connection failed: ${error.message}`;
     }
 
+    // RabbitMQ 상태 확인
+    try {
+      if (fastify.rabbitmq.ready) {
+        rabbitStatus = {
+          status: "connected",
+          message: "RabbitMQ is connected and operational.",
+        };
+      } else {
+        rabbitStatus.message = "RabbitMQ is not connected.";
+      }
+    } catch (error) {
+      rabbitStatus.message = `RabbitMQ connection check failed: ${error.message}`;
+    }
+
     // 모든 상태가 정상일 때
-    if (redisStatus.status === "connected" && dbStatus.status === "connected") {
+    if (
+      redisStatus.status === "connected" &&
+      dbStatus.status === "connected" &&
+      rabbitStatus.status === "connected"
+    ) {
       reply.send({
         status: "ok",
         message: "The server is ready.",
         redis: redisStatus,
         database: dbStatus,
+        rabbitmq: rabbitStatus,
       });
     } else {
       // 하나라도 비정상일 때
@@ -121,6 +156,7 @@ fastify.get("/readiness", async (request, reply) => {
         message: "The server is not fully ready. See details below.",
         redis: redisStatus,
         database: dbStatus,
+        rabbitmq: rabbitStatus,
       });
     }
   } catch (unexpectedError) {
@@ -636,6 +672,19 @@ io.on("connection", (socket) => {
 const startServer = async () => {
   try {
     const port = Number(fastify.config.PORT);
+
+    try {
+      const queue = "allow_entry_queue";
+      // 서버 시작 전 기본 큐 생성
+      await fastify.rabbitmq.queueDeclare({
+        queue,
+        durable: true, // 메시지를 영구적으로 저장
+      });
+      fastify.log.info(`Default queue "${queue}" declared successfully.`);
+    } catch (err) {
+      fastify.log.error(`Failed to declare default queue "${queue}":`, err);
+    }
+
     const address = await fastify.listen({ port, host: "0.0.0.0" });
 
     fastify.log.info(`Server is now listening on ${address}`);
