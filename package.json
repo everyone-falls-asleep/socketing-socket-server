@@ -4,11 +4,18 @@
   "description": "This project was bootstrapped with Fastify-CLI.",
   "main": "index.js",
   "scripts": {
+    "format": "prettier --write \"./**/*.{js,jsx,ts,tsx,json,css,scss,md}\"",
+    "prepare": "husky",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "",
   "license": "ISC",
   "type": "module",
+  "lint-staged": {
+    "*.{ts,tsx,js,jsx,json,css,scss,md}": [
+      "prettier --write"
+    ]
+  },
   "dependencies": {
     "@fastify/cors": "^10.0.1",
     "@fastify/env": "^5.0.1",
@@ -22,5 +29,10 @@
     "jsonwebtoken": "^9.0.2",
     "pg": "^8.13.1",
     "socket.io": "^4.8.1"
+  },
+  "devDependencies": {
+    "husky": "^9.1.7",
+    "lint-staged": "^15.2.10",
+    "prettier": "^3.4.1"
   }
 }
