@@ -11,7 +11,6 @@ import fastifyPostgres from "@fastify/postgres";
 import fastifyRabbit from "fastify-rabbitmq";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { randomUUID } from "node:crypto";
 
 const SELECTION_TIMEOUT = 10 * 1000; // 선택 만료 시간: 10초
 const MAX_ROOM_CONNECTIONS = 100; // 각 Room의 최대 접속자 수
@@ -475,41 +474,6 @@ io.on("connection", (socket) => {
         return;
       }
 
-      // 분산 락을 사용하여 룸 초기화 및 'allow' 메시지 발송 처리
-      const lockKey = `lock:initialize:${roomName}`;
-      const lock = await acquireLock(lockKey, 5000); // 5초 동안 락 시도
-
-      if (lock.acquired) {
-        try {
-          // 룸이 초기화되었는지 Redis에서 확인
-          const isInitialized = await fastify.redis.get(
-            `initialized:${roomName}`
-          );
-
-          if (!isInitialized) {
-            // 최대 접속자 수만큼 'allow' 메시지 발송
-            for (let i = 0; i < MAX_ROOM_CONNECTIONS; i++) {
-              await sendMessageToQueue(roomName, "allow");
-            }
-
-            // 룸이 초기화되었음을 Redis에 표시
-            await fastify.redis.set(`initialized:${roomName}`, "true");
-
-            fastify.log.info(
-              `Initialized room ${roomName} with ${MAX_ROOM_CONNECTIONS} 'allow' messages.`
-            );
-          }
-        } finally {
-          // 락 해제
-          await releaseLock(lock);
-        }
-      } else {
-        // 락 획득 실패 시 잠시 대기 후 재시도 또는 진행
-        fastify.log.warn(
-          `Failed to acquire lock for room initialization: ${roomName}`
-        );
-      }
-
       // 클라이언트를 해당 room에 추가
       socket.join(roomName);
 
@@ -735,31 +699,6 @@ io.on("connection", (socket) => {
     }
   });
 });
-
-// 분산 락 획득 함수
-async function acquireLock(lockKey, ttl) {
-  const lockValue = randomUUID(); // 고유한 값 생성
-  const acquired = await fastify.redis.set(lockKey, lockValue, "NX", "PX", ttl);
-
-  return {
-    acquired: !!acquired,
-    lockKey,
-    lockValue,
-  };
-}
-
-// 분산 락 해제 함수
-async function releaseLock(lock) {
-  const script = `
-    if redis.call("get", KEYS[1]) == ARGV[1]
-    then
-      return redis.call("del", KEYS[1])
-    else
-      return 0
-    end
-  `;
-  await fastify.redis.eval(script, 1, lock.lockKey, lock.lockValue);
-}
 
 // RabbitMQ 메시지 전송 로직
 async function sendMessageToQueue(roomName, message) {
