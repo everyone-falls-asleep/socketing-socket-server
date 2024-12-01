@@ -762,7 +762,8 @@ async function releaseLock(lock) {
 }
 
 // RabbitMQ 메시지 전송 로직
-async function sendMessageToQueue(queueName, message) {
+async function sendMessageToQueue(roomName, message) {
+  const queueName = `queue:${roomName}`;
   try {
     // 큐 선언 (존재하지 않을 경우 생성)
     await fastify.rabbitmq.queueDeclare({ queue: queueName, durable: true });
