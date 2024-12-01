@@ -11,8 +11,10 @@ import fastifyPostgres from "@fastify/postgres";
 import fastifyRabbit from "fastify-rabbitmq";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { randomUUID } from "node:crypto";
 
 const SELECTION_TIMEOUT = 10 * 1000; // 선택 만료 시간: 10초
+const MAX_ROOM_CONNECTIONS = 100; // 각 Room의 최대 접속자 수
 
 const schema = {
   type: "object",
@@ -431,8 +433,6 @@ setInterval(() => {
   io.emit("serverTime", serverTime);
 }, 1000); // 1초마다 서버 시간 전송
 
-const seatData = {}; // Room별 좌석 정보를 저장하는 객체
-
 io.use((socket, next) => {
   const token = socket.handshake.auth.token;
 
@@ -462,12 +462,63 @@ io.on("connection", (socket) => {
     // room 이름 생성 (eventId와 eventDateId 조합)
     const roomName = `${eventId}_${eventDateId}`;
 
-    // 클라이언트를 해당 room에 추가
-    socket.join(roomName);
-
-    fastify.log.info(`Client ${socket.id} joined room: ${roomName}`);
-
     try {
+      // Room의 현재 접속자 수 가져오기
+      const currentConnections =
+        io.sockets.adapter.rooms.get(roomName)?.size || 0;
+
+      // Room 접속자가 최대치를 초과하면 연결 거부
+      if (currentConnections >= MAX_ROOM_CONNECTIONS) {
+        socket.emit("error", {
+          message: `Room ${roomName} is full. Maximum connections reached.`,
+        });
+        return;
+      }
+
+      // 분산 락을 사용하여 룸 초기화 및 'allow' 메시지 발송 처리
+      const lockKey = `lock:initialize:${roomName}`;
+      const lock = await acquireLock(lockKey, 5000); // 5초 동안 락 시도
+
+      if (lock.acquired) {
+        try {
+          // 룸이 초기화되었는지 Redis에서 확인
+          const isInitialized = await fastify.redis.get(
+            `initialized:${roomName}`
+          );
+
+          if (!isInitialized) {
+            // 최대 접속자 수만큼 'allow' 메시지 발송
+            for (let i = 0; i < MAX_ROOM_CONNECTIONS; i++) {
+              await sendMessageToQueue(roomName, "allow");
+            }
+
+            // 룸이 초기화되었음을 Redis에 표시
+            await fastify.redis.set(`initialized:${roomName}`, "true");
+
+            fastify.log.info(
+              `Initialized room ${roomName} with ${MAX_ROOM_CONNECTIONS} 'allow' messages.`
+            );
+          }
+        } finally {
+          // 락 해제
+          await releaseLock(lock);
+        }
+      } else {
+        // 락 획득 실패 시 잠시 대기 후 재시도 또는 진행
+        fastify.log.warn(
+          `Failed to acquire lock for room initialization: ${roomName}`
+        );
+      }
+
+      // 클라이언트를 해당 room에 추가
+      socket.join(roomName);
+
+      fastify.log.info(
+        `Client ${socket.id} joined room: ${roomName}. Current connections: ${
+          currentConnections + 1
+        }/${MAX_ROOM_CONNECTIONS}`
+      );
+
       // 좌석 정보 생성 또는 가져오기
       let seats = await getAllSeatsFromRedis(roomName);
       if (seats.length === 0) {
@@ -672,43 +723,110 @@ io.on("connection", (socket) => {
     }
   });
 
+  // 클라이언트 연결 해제 처리
   socket.on("disconnect", async () => {
     fastify.log.info(`Client disconnected: ${socket.id}`);
+  });
 
-    // 모든 room에 대해 좌석 선택 초기화
-    const rooms = Array.from(socket.rooms).filter((room) => room !== socket.id);
-    for (const roomName of rooms) {
-      const allSeats = await getAllSeatsFromRedis(roomName);
-      for (const seat of allSeats) {
-        if (seat.selectedBy === socket.id) {
-          seat.selectedBy = null;
-          seat.updatedAt = new Date().toISOString();
-          seat.expirationTime = null;
-
-          // Redis 업데이트
-          await updateSeatInRedis(roomName, seat.id, seat);
-
-          // 같은 room의 유저들에게 상태 변경 브로드캐스트
-          io.to(roomName).emit("seatSelected", [
-            {
-              seatId: seat.id,
-              selectedBy: null,
-              updatedAt: seat.updatedAt,
-              expirationTime: null,
-            },
-          ]);
-        }
-      }
+  // 클라이언트가 Room을 떠날 때 처리
+  socket.adapter.on("leave-room", async (room, id) => {
+    if (room != id) {
+      await handleClientLeave(socket, room);
     }
   });
-
-  // 클라이언트가 room을 떠날 때 처리
-  socket.on("leaveRoom", ({ eventId, eventDateId }) => {
-    const roomName = `${eventId}_${eventDateId}`;
-    socket.leave(roomName);
-    fastify.log.info(`Client ${socket.id} left room: ${roomName}`);
-  });
 });
+
+// 분산 락 획득 함수
+async function acquireLock(lockKey, ttl) {
+  const lockValue = randomUUID(); // 고유한 값 생성
+  const acquired = await fastify.redis.set(lockKey, lockValue, "NX", "PX", ttl);
+
+  return {
+    acquired: !!acquired,
+    lockKey,
+    lockValue,
+  };
+}
+
+// 분산 락 해제 함수
+async function releaseLock(lock) {
+  const script = `
+    if redis.call("get", KEYS[1]) == ARGV[1]
+    then
+      return redis.call("del", KEYS[1])
+    else
+      return 0
+    end
+  `;
+  await fastify.redis.eval(script, 1, lock.lockKey, lock.lockValue);
+}
+
+// RabbitMQ 메시지 전송 로직
+async function sendMessageToQueue(queueName, message) {
+  try {
+    // 큐 선언 (존재하지 않을 경우 생성)
+    await fastify.rabbitmq.queueDeclare({ queue: queueName, durable: true });
+
+    // Publisher 생성
+    const publisher = fastify.rabbitmq.createPublisher({
+      confirm: true, // 메시지가 성공적으로 전송되었는지 확인
+      maxAttempts: 3, // 최대 재시도 횟수
+    });
+
+    // 메시지 전송
+    await publisher.send(queueName, JSON.stringify(message));
+
+    fastify.log.info(`Message sent to queue "${queueName}": ${message}`);
+  } catch (error) {
+    fastify.log.error(`Failed to send message to queue "${queueName}":`, error);
+  }
+}
+
+// 공통 로직: 클라이언트가 Room을 떠날 때 처리
+async function handleClientLeave(socket, roomName) {
+  try {
+    const allSeats = await getAllSeatsFromRedis(roomName);
+
+    for (const seat of allSeats) {
+      if (seat.selectedBy === socket.id) {
+        seat.selectedBy = null;
+        seat.updatedAt = new Date().toISOString();
+        seat.expirationTime = null;
+
+        // Redis 업데이트
+        await updateSeatInRedis(roomName, seat.id, seat);
+
+        // 같은 Room의 유저들에게 상태 변경 브로드캐스트
+        socket.to(roomName).emit("seatsSelected", [
+          {
+            seatId: seat.id,
+            selectedBy: null,
+            updatedAt: seat.updatedAt,
+            expirationTime: null,
+          },
+        ]);
+      }
+    }
+
+    // Room의 현재 접속자 수 확인
+    const currentConnections =
+      io.sockets.adapter.rooms.get(roomName)?.size || 0;
+
+    fastify.log.info(
+      `Client ${socket.id} left room: ${roomName}. Current connections: ${currentConnections}/${MAX_ROOM_CONNECTIONS}`
+    );
+
+    // 접속자가 최대치 아래로 떨어지면 RabbitMQ에 신호 전송
+    if (currentConnections < MAX_ROOM_CONNECTIONS) {
+      await sendMessageToQueue(roomName, "allow");
+    }
+  } catch (error) {
+    fastify.log.error(
+      `Error handling client leave for room ${roomName}:`,
+      error
+    );
+  }
+}
 
 const findAdjacentSeats = (seats, selectedSeat, numberOfSeats) => {
   const area = selectedSeat.area;
@@ -837,19 +955,6 @@ const findAdjacentSeats = (seats, selectedSeat, numberOfSeats) => {
 const startServer = async () => {
   try {
     const port = Number(fastify.config.PORT);
-
-    try {
-      const queue = "allow_entry_queue";
-      // 서버 시작 전 기본 큐 생성
-      await fastify.rabbitmq.queueDeclare({
-        queue,
-        durable: true, // 메시지를 영구적으로 저장
-      });
-      fastify.log.info(`Default queue "${queue}" declared successfully.`);
-    } catch (err) {
-      fastify.log.error(`Failed to declare default queue "${queue}":`, err);
-    }
-
     const address = await fastify.listen({ port, host: "0.0.0.0" });
 
     fastify.log.info(`Server is now listening on ${address}`);
