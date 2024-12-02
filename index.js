@@ -174,27 +174,33 @@ fastify.get("/readiness", async (request, reply) => {
   }
 });
 
-async function getSeatReservationStatus(eventId, eventDateId, seatId) {
+// 특정 구역에 대한 좌석 예약 상태 가져오기
+async function getSeatReservationStatusForArea(
+  eventId,
+  eventDateId,
+  areaId,
+  seatId
+) {
   const query = `
-  SELECT
-    seat.id AS seat_id,
-    seat.cx,
-    seat.cy,
-    seat.area,
-    seat.row,
-    seat.number,
-    reservation.id AS reservation_id,
-    eventDate.id AS event_date_id,
-    eventDate.date
-  FROM seat
-  LEFT JOIN reservation ON reservation."seatId" = seat.id AND reservation."deletedAt" IS NULL
-  LEFT JOIN event_date AS eventDate ON reservation."eventDateId" = eventDate.id
-  WHERE seat."eventId" = $1
-  AND (eventDate.id = $2 OR eventDate.id IS NULL)
-  AND seat."id" = $3
-  LIMIT 1;
-`;
-  const params = [eventId, eventDateId, seatId];
+    SELECT
+      seat.id AS seat_id,
+      seat.cx,
+      seat.cy,
+      seat.row,
+      seat.number,
+      reservation.id AS reservation_id,
+      eventDate.id AS event_date_id,
+      eventDate.date
+    FROM seat
+    LEFT JOIN reservation ON reservation."seatId" = seat.id AND reservation."deletedAt" IS NULL
+    LEFT JOIN event_date AS eventDate ON reservation."eventDateId" = eventDate.id
+    WHERE seat."eventId" = $1
+      AND seat."areaId" = $2
+      AND (eventDate.id = $3 OR eventDate.id IS NULL)
+      AND seat."id" = $4
+    LIMIT 1;
+  `;
+  const params = [eventId, areaId, eventDateId, seatId];
 
   const { rows } = await fastify.pg.query(query, params);
 
@@ -205,46 +211,69 @@ async function getSeatReservationStatus(eventId, eventDateId, seatId) {
       id: rows[0].seat_id,
       cx: rows[0].cx,
       cy: rows[0].cy,
-      area: rows[0].area,
       row: rows[0].row,
       number: rows[0].number,
       reservations: [],
     };
     if (rows[0].reservation_id) {
-      result.reservations.push({ id: rows[0].reservation_id });
-      if (rows[0].event_date_id) {
-        result.reservations[0].eventDate = {
-          id: rows[0].event_date_id,
-          date: rows[0].date,
-        };
-      }
+      result.reservations.push({
+        id: rows[0].reservation_id,
+        eventDate: rows[0].event_date_id
+          ? {
+              id: rows[0].event_date_id,
+              date: rows[0].date,
+            }
+          : null,
+      });
     }
   }
 
   return result;
 }
 
-// 좌석 정보를 가져오는 함수 (DB에서 조회)
-async function getSeatsForRoom(eventId, eventDateId) {
+// 이벤트에 대한 모든 구역 정보를 가져오는 함수
+async function getAreasForRoom(eventId) {
   // PostgreSQL 쿼리 실행
   const query = `
-      SELECT
-        seat.id AS seat_id,
-        seat.cx,
-        seat.cy,
-        seat.area,
-        seat.row,
-        seat.number,
-        reservation.id AS reservation_id,
-        eventDate.id AS event_date_id,
-        eventDate.date
-      FROM seat
-      LEFT JOIN reservation ON reservation."seatId" = seat.id AND reservation."deletedAt" IS NULL
-      LEFT JOIN event_date AS eventDate ON reservation."eventDateId" = eventDate.id
-      WHERE seat."eventId" = $1
+    SELECT
+      area.id,
+      area.label,
+      area.x,
+      area.y,
+      area.svg,
+      area.price
+    FROM area
+    WHERE area."eventId" = $1
+      AND area."deletedAt" IS NULL;
+  `;
+  const params = [eventId];
+
+  const { rows } = await fastify.pg.query(query, params);
+
+  // 구역 정보를 반환
+  return rows;
+}
+
+// 특정 구역의 좌석 정보를 가져오는 함수
+async function getSeatsForArea(areaId, eventDateId) {
+  // PostgreSQL 쿼리 실행
+  const query = `
+    SELECT
+      seat.id AS seat_id,
+      seat.cx,
+      seat.cy,
+      seat.row,
+      seat.number,
+      reservation.id AS reservation_id,
+      eventDate.id AS event_date_id,
+      eventDate.date
+    FROM seat
+    LEFT JOIN reservation ON reservation."seatId" = seat.id AND reservation."deletedAt" IS NULL
+    LEFT JOIN event_date AS eventDate ON reservation."eventDateId" = eventDate.id
+    WHERE seat."areaId" = $1
       AND (eventDate.id = $2 OR eventDate.id IS NULL);
-    `;
-  const params = [eventId, eventDateId];
+  `;
+  const params = [areaId, eventDateId];
 
   const { rows } = await fastify.pg.query(query, params);
 
@@ -257,7 +286,6 @@ async function getSeatsForRoom(eventId, eventDateId) {
         id: row.seat_id,
         cx: row.cx,
         cy: row.cy,
-        area: row.area,
         row: row.row,
         number: row.number,
         reservations: [],
@@ -283,25 +311,51 @@ async function getSeatsForRoom(eventId, eventDateId) {
   return Array.from(seatMap.values());
 }
 
-// Redis에서 좌석 정보를 저장
-async function setSeatDataInRedis(roomName, seatData) {
-  await fastify.redis.set(`seatData:${roomName}`, JSON.stringify(seatData));
+// Redis에서 구역 정보를 저장
+async function setAreaDataInRedis(roomName, areaData) {
+  await fastify.redis.set(`areaData:${roomName}`, JSON.stringify(areaData));
+}
+
+// 구역 별 예약 상태를 Redis에 저장
+async function updateAreaInRedis(roomName, areaId, area) {
+  await fastify.redis.hset(`areas:${roomName}`, areaId, JSON.stringify(area));
+}
+
+// Redis에서 구역 별 예약 상태 가져오기
+async function getAreaFromRedis(roomName, areaId) {
+  const areaData = await fastify.redis.hget(`areas:${roomName}`, areaId);
+  return areaData ? JSON.parse(areaData) : null;
+}
+
+// Redis에서 모든 구역 가져오기
+async function getAllAreasFromRedis(roomName) {
+  const areasData = await fastify.redis.hgetall(`areas:${roomName}`);
+  const areas = [];
+  for (const areaId in areasData) {
+    areas.push(JSON.parse(areasData[areaId]));
+  }
+  return areas;
+}
+
+// Redis에서 좌석 정보를 구역 별로 저장
+async function setSeatDataInRedis(areaName, seatData) {
+  await fastify.redis.set(`seatData:${areaName}`, JSON.stringify(seatData));
 }
 
 // 좌석 선택 상태를 Redis에 저장
-async function updateSeatInRedis(roomName, seatId, seat) {
-  await fastify.redis.hset(`seats:${roomName}`, seatId, JSON.stringify(seat));
+async function updateSeatInRedis(areaName, seatId, seat) {
+  await fastify.redis.hset(`seats:${areaName}`, seatId, JSON.stringify(seat));
 }
 
 // Redis에서 좌석 선택 상태 가져오기
-async function getSeatFromRedis(roomName, seatId) {
-  const seatData = await fastify.redis.hget(`seats:${roomName}`, seatId);
+async function getSeatFromRedis(areaName, seatId) {
+  const seatData = await fastify.redis.hget(`seats:${areaName}`, seatId);
   return seatData ? JSON.parse(seatData) : null;
 }
 
-// Redis에서 모든 좌석 가져오기
-async function getAllSeatsFromRedis(roomName) {
-  const seatsData = await fastify.redis.hgetall(`seats:${roomName}`);
+// Redis에서 특정 구역의 모든 좌석 가져오기
+async function getAllSeatsFromRedis(areaName) {
+  const seatsData = await fastify.redis.hgetall(`seats:${areaName}`);
   const seats = [];
   for (const seatId in seatsData) {
     seats.push(JSON.parse(seatsData[seatId]));
@@ -310,10 +364,10 @@ async function getAllSeatsFromRedis(roomName) {
 }
 
 // 좌석 선택 만료를 Redis에서 설정
-async function setSeatExpirationInRedis(roomName, seatId) {
+async function setSeatExpirationInRedis(areaName, seatId) {
   // 만료 시간을 설정하여 키를 설정
   await fastify.redis.set(
-    `timer:${roomName}:${seatId}`,
+    `timer:${areaName}:${seatId}`,
     "active",
     "PX",
     SELECTION_TIMEOUT
@@ -321,8 +375,8 @@ async function setSeatExpirationInRedis(roomName, seatId) {
 }
 
 // Redis에서 좌석 선택 만료 확인
-async function isSeatExpired(roomName, seatId) {
-  const status = await fastify.redis.exists(`timer:${roomName}:${seatId}`);
+async function isSeatExpired(areaName, seatId) {
+  const status = await fastify.redis.exists(`timer:${areaName}:${seatId}`);
   return !status; // 존재하지 않으면 만료됨
 }
 
@@ -483,22 +537,22 @@ io.on("connection", (socket) => {
         }/${MAX_ROOM_CONNECTIONS}`
       );
 
-      // 좌석 정보 생성 또는 가져오기
-      let seats = await getAllSeatsFromRedis(roomName);
-      if (seats.length === 0) {
-        seats = await getSeatsForRoom(eventId, eventDateId); // DB에서 가져오기
-
-        // Redis에 저장
-        for (const seat of seats) {
-          await updateSeatInRedis(roomName, seat.id, seat);
+      // 구역 정보 가져오기
+      let areas = await getAllAreasFromRedis(roomName);
+      if (areas.length === 0) {
+        // Redis에 구역 정보가 없으면 DB에서 가져오기
+        areas = await getAreasForRoom(eventId, eventDateId); // DB에서 가져오기
+        // Redis에 구역 정보 저장
+        for (const area of areas) {
+          await updateAreaInRedis(roomName, area.id, area);
         }
-        await setSeatDataInRedis(roomName, seats);
+        await setAreaDataInRedis(roomName, areas);
       }
 
       // 클라이언트에게 데이터 전송
       socket.emit("roomJoined", {
         message: `You have joined the room: ${roomName}`,
-        seats,
+        areas,
       });
     } catch (error) {
       fastify.log.error(`Error fetching data for room ${roomName}:`, error);
