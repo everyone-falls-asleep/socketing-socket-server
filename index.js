@@ -591,9 +591,8 @@ const io = new Server(fastify.server, {
     credentials: true,
   },
   transports: ["websocket"],
+  adapter: createAdapter(pubClient, subClient),
 });
-
-io.adapter(createAdapter(pubClient, subClient));
 
 instrument(io, {
   auth: {
@@ -1008,13 +1007,17 @@ io.on("connection", (socket) => {
   socket.on("disconnect", async () => {
     fastify.log.info(`Client disconnected: ${socket.id}`);
   });
+});
 
-  // 클라이언트가 Room을 떠날 때 처리
-  socket.adapter.on("leave-room", async (room, id) => {
-    if (room != id) {
+// 클라이언트가 Room을 떠날 때 처리
+io.of("/").adapter.on("leave-room", async (room, id) => {
+  const socket = io.sockets.sockets.get(id);
+  if (room != id) {
+    io.serverSideEmit("leave-room", { room, id });
+    if (socket) {
       await handleClientLeave(socket, room);
     }
-  });
+  }
 });
 
 // RabbitMQ 메시지 전송 로직
@@ -1043,17 +1046,17 @@ async function sendMessageToQueue(roomName, message) {
 async function handleClientLeave(socket, roomName) {
   try {
     // Room의 현재 접속자 수 확인
-    const currentConnections =
-      io.sockets.adapter.rooms.get(roomName)?.size || 0;
+    // const currentConnections =
+    //   io.sockets.adapter.rooms.get(roomName)?.size || 0;
 
-    fastify.log.info(
-      `Client ${socket.id} left room: ${roomName}. Current connections: ${currentConnections}/${MAX_ROOM_CONNECTIONS}`
-    );
+    // fastify.log.info(
+    //   `Client ${socket.id} left room: ${roomName}. Current connections: ${currentConnections}/${MAX_ROOM_CONNECTIONS}`
+    // );
 
     // 접속자가 최대치 아래로 떨어지면 RabbitMQ에 신호 전송
-    if (currentConnections < MAX_ROOM_CONNECTIONS) {
-      await sendMessageToQueue(roomName, "allow");
-    }
+    // if (currentConnections < MAX_ROOM_CONNECTIONS) {
+    //   await sendMessageToQueue(roomName, "allow");
+    // }
   } catch (error) {
     fastify.log.error(
       `Error handling client leave for room ${roomName}:`,
