@@ -255,7 +255,7 @@ async function getAreasForRoom(eventId) {
 }
 
 // 특정 구역의 좌석 정보를 가져오는 함수
-async function getSeatsForArea(areaId, eventDateId) {
+async function getSeatsForArea(eventDateId, areaId) {
   // PostgreSQL 쿼리 실행
   const query = `
     SELECT
@@ -562,15 +562,55 @@ io.on("connection", (socket) => {
     }
   });
 
+  socket.on("joinArea", async ({ eventId, eventDateId, areaId }) => {
+    if (!eventId || !eventDateId || !areaId) {
+      socket.emit("error", { message: "Invalid area parameters." });
+      return;
+    }
+
+    const areaName = `${eventId}_${eventDateId}_${areaId}`;
+
+    try {
+      fastify.log.info(`area name: ${areaName}`);
+      // 클라이언트를 해당 area에 추가
+      socket.join(areaName);
+
+      fastify.log.info(`Client ${socket.id} joined area: ${areaName}.`);
+
+      // 좌석 정보 가져오기
+      let seats = await getAllSeatsFromRedis(areaName);
+      if (seats.length === 0) {
+        // Redis에 좌석 정보가 없으면 DB에서 가져오기
+        seats = await getSeatsForArea(eventDateId, areaId); // DB에서 가져오기
+        // Redis에 좌석 정보 저장
+        for (const seat of seats) {
+          await updateSeatInRedis(areaName, seat.id, seat);
+        }
+        await setSeatDataInRedis(areaName, seats);
+      }
+
+      // 클라이언트에게 데이터 전송
+      socket.emit("areaJoined", {
+        message: `You have joined the area: ${areaName}`,
+        seats,
+      });
+    } catch (error) {
+      fastify.log.error(`Error fetching data for area ${areaName}:`, error);
+      socket.emit("error", {
+        message: "Failed to fetch area data.",
+      });
+    }
+  });
+
   // 좌석 선택 처리 (단일 및 연석)
   socket.on(
     "selectSeats",
-    async ({ seatId, eventId, eventDateId, numberOfSeats = 1 }) => {
-      const roomName = `${eventId}_${eventDateId}`;
+    async ({ seatId, eventId, eventDateId, areaId, numberOfSeats = 1 }) => {
+      const areaName = `${eventId}_${eventDateId}_${areaId}`;
       const currentTime = new Date().toISOString();
 
       // Redis에서 모든 좌석 정보 조회
-      const allSeats = await getAllSeatsFromRedis(roomName);
+      const allSeats = await getAllSeatsFromRedis(areaName);
 
       // 이전에 선택한 좌석들을 찾고 취소
       for (const s of allSeats) {
@@ -580,13 +620,13 @@ io.on("connection", (socket) => {
           s.expirationTime = null;
 
           // Redis 만료 키 제거
-          await fastify.redis.del(`timer:${roomName}:${s.id}`);
+          await fastify.redis.del(`timer:${areaName}:${s.id}`);
 
           // Redis 업데이트
-          await updateSeatInRedis(roomName, s.id, s);
+          await updateSeatInRedis(areaName, s.id, s);
 
           // 같은 room의 유저들에게 상태 변경 브로드캐스트
-          io.to(roomName).emit("seatsSelected", [
+          io.to(areaName).emit("seatsSelected", [
             {
               seatId: s.id,
               selectedBy: null,
@@ -641,7 +681,7 @@ io.on("connection", (socket) => {
         }
 
         // 이미 다른 유저가 선택한 좌석인지 확인
-        const expired = await isSeatExpired(roomName, seat.id);
+        const expired = await isSeatExpired(areaName, seat.id);
         if (seat.selectedBy && !expired) {
           socket.emit("error", {
             message: `Seat ${seat.id} is already selected by another user.`,
@@ -657,8 +697,8 @@ io.on("connection", (socket) => {
         ).toISOString();
 
         // Redis 업데이트
-        await updateSeatInRedis(roomName, seat.id, seat);
-        await setSeatExpirationInRedis(roomName, seat.id);
+        await updateSeatInRedis(areaName, seat.id, seat);
+        await setSeatExpirationInRedis(areaName, seat.id);
 
         result.push({
           seatId: seat.id,
@@ -671,7 +711,7 @@ io.on("connection", (socket) => {
       }
 
       // 같은 room의 유저들에게 상태 변경 브로드캐스트
-      io.to(roomName).emit("seatsSelected", result);
+      io.to(areaName).emit("seatsSelected", result);
     }
   );
 
@@ -741,6 +781,33 @@ io.on("connection", (socket) => {
     }
   });
 
+  socket.on("exitArea", async ({ eventId, eventDateId, areaId, userId }) => {
+    if (!eventId || !eventDateId || !areaId) {
+      socket.emit("error", { message: "Invalid area parameters." });
+      return;
+    }
+
+    const areaName = `${eventId}_${eventDateId}_${areaId}`;
+
+    try {
+      if (areaName != userId) {
+        await handleClientLeaveArea(socket, areaName);
+      }
+
+      fastify.log.info(`Client ${userId} exited area: ${areaName}.`);
+
+      // 클라이언트에게 데이터 전송
+      socket.emit("areaExited", {
+        message: `You have left the area: ${areaName}`,
+      });
+    } catch (error) {
+      fastify.log.error(`Error exiting area ${areaName}:`, error);
+      socket.emit("error", {
+        message: "Failed to leave current area.",
+      });
+    }
+  });
+
   // 클라이언트 연결 해제 처리
   socket.on("disconnect", async () => {
     fastify.log.info(`Client disconnected: ${socket.id}`);
@@ -776,32 +843,9 @@ async function sendMessageToQueue(roomName, message) {
   }
 }
 
-// 공통 로직: 클라이언트가 Room을 떠날 때 처리
+// 공통 로직: 클라이언트가 Room을 떠날 때 처리 수정 필요
 async function handleClientLeave(socket, roomName) {
   try {
-    const allSeats = await getAllSeatsFromRedis(roomName);
-
-    for (const seat of allSeats) {
-      if (seat.selectedBy === socket.id) {
-        seat.selectedBy = null;
-        seat.updatedAt = new Date().toISOString();
-        seat.expirationTime = null;
-
-        // Redis 업데이트
-        await updateSeatInRedis(roomName, seat.id, seat);
-
-        // 같은 Room의 유저들에게 상태 변경 브로드캐스트
-        socket.to(roomName).emit("seatsSelected", [
-          {
-            seatId: seat.id,
-            selectedBy: null,
-            updatedAt: seat.updatedAt,
-            expirationTime: null,
-          },
-        ]);
-      }
-    }
-
     // Room의 현재 접속자 수 확인
     const currentConnections =
       io.sockets.adapter.rooms.get(roomName)?.size || 0;
@@ -822,8 +866,32 @@ async function handleClientLeave(socket, roomName) {
   }
 }
 
+async function handleClientLeaveArea(socket, areaName) {
+  const allSeats = await getAllSeatsFromRedis(areaName);
+
+  for (const seat of allSeats) {
+    if (seat.selectedBy === socket.id) {
+      seat.selectedBy = null;
+      seat.updatedAt = new Date().toISOString();
+      seat.expirationTime = null;
+
+      // Redis 업데이트
+      await updateSeatInRedis(areaName, seat.id, seat);
+
+      // 같은 Area의 유저들에게 상태 변경 브로드캐스트
+      socket.to(areaName).emit("seatsSelected", [
+        {
+          seatId: seat.id,
+          selectedBy: null,
+          updatedAt: seat.updatedAt,
+          expirationTime: null,
+        },
+      ]);
+    }
+  }
+}
+
 const findAdjacentSeats = (seats, selectedSeat, numberOfSeats) => {
-  const area = selectedSeat.area;
   const selectedRow = selectedSeat.row;
   const selectedNumber = selectedSeat.number;
 
@@ -851,7 +919,6 @@ const findAdjacentSeats = (seats, selectedSeat, numberOfSeats) => {
       // 해당 위치에 좌석이 있는지 확인
       const seat = availableSeats.find(
         (s) =>
-          s.area === area && // 같은 구역인지 확인
           s.row === pos.row && // 같은 행인지 확인
           s.number === pos.number && // 해당 좌석 번호인지 확인
           !result.includes(s) // 이미 선택된 좌석이 아닌지 확인
@@ -871,13 +938,7 @@ const findAdjacentSeats = (seats, selectedSeat, numberOfSeats) => {
   // 같은 행에서 충분한 좌석을 찾지 못한 경우, 다른 행에서 좌석 찾기
   if (result.length < numberOfSeats) {
     // 동일한 구역(area) 내의 모든 행(row) 가져오기
-    const rowsInArea = [
-      ...new Set(
-        availableSeats
-          .filter((seat) => seat.area === area)
-          .map((seat) => seat.row)
-      ),
-    ];
+    const rowsInArea = [...new Set(availableSeats.map((seat) => seat.row))];
 
     // 현재 행을 제외하고, 행 번호의 차이에 따라 가까운 순서대로 정렬
     const sortedRows = rowsInArea
@@ -903,7 +964,6 @@ const findAdjacentSeats = (seats, selectedSeat, numberOfSeats) => {
           // 해당 위치에 좌석이 있는지 확인
           const seat = availableSeats.find(
             (s) =>
-              s.area === area && // 같은 구역인지 확인
               s.row === pos.row && // 해당 행인지 확인
               s.number === pos.number && // 해당 좌석 번호인지 확인
               !result.includes(s) // 이미 선택된 좌석이 아닌지 확인
@@ -925,17 +985,15 @@ const findAdjacentSeats = (seats, selectedSeat, numberOfSeats) => {
   // 아직도 좌석을 다 찾지 못한 경우, 동일한 구역 내의 다른 좌석들을 추가
   if (result.length < numberOfSeats) {
     // 남은 좌석들을 거리 순으로 정렬
-    const remainingSeats = availableSeats
-      .filter((seat) => seat.area === area && !result.includes(seat))
-      .sort((a, b) => {
-        const rowDiff =
-          Math.abs(a.row - selectedRow) - Math.abs(b.row - selectedRow);
-        if (rowDiff !== 0) return rowDiff;
-        return (
-          Math.abs(a.number - selectedNumber) -
-          Math.abs(b.number - selectedNumber)
-        );
-      });
+    const remainingSeats = availableSeats.sort((a, b) => {
+      const rowDiff =
+        Math.abs(a.row - selectedRow) - Math.abs(b.row - selectedRow);
+      if (rowDiff !== 0) return rowDiff;
+      return (
+        Math.abs(a.number - selectedNumber) -
+        Math.abs(b.number - selectedNumber)
+      );
+    });
 
     for (const seat of remainingSeats) {
       if (result.length >= numberOfSeats) break;
