@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const SELECTION_TIMEOUT = 10 * 1000; // 선택 만료 시간: 10초
-const MAX_ROOM_CONNECTIONS = 100; // 각 Room의 최대 접속자 수
+const MAX_ROOM_CONNECTIONS = 30; // 각 Room의 최대 접속자 수
 
 const schema = {
   type: "object",
@@ -610,6 +610,12 @@ setInterval(() => {
   io.emit("serverTime", serverTime);
 }, 1000); // 1초마다 서버 시간 전송
 
+// Redis 기반 유저 수 가져오기 함수
+async function getRoomUserCount(io, roomName) {
+  const sockets = await io.in(roomName).fetchSockets(); // 모든 노드에서 룸에 속한 소켓 ID 가져오기
+  return sockets.length; // 소켓 수 반환
+}
+
 io.use((socket, next) => {
   const token = socket.handshake.auth.token;
 
@@ -641,9 +647,9 @@ io.on("connection", (socket) => {
 
     try {
       // Room의 현재 접속자 수 가져오기
-      const currentConnections =
-        io.sockets.adapter.rooms.get(roomName)?.size || 0;
+      const currentConnections = await getRoomUserCount(io, roomName);
 
+      fastify.log.info(`currentConnections: ${currentConnections}`);
       // Room 접속자가 최대치를 초과하면 연결 거부
       if (currentConnections >= MAX_ROOM_CONNECTIONS) {
         socket.emit("error", {
