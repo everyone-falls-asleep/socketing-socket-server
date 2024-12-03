@@ -984,6 +984,8 @@ io.on("connection", (socket) => {
         await handleClientLeaveArea(socket, areaName);
       }
 
+      socket.leave(areaName);
+
       fastify.log.info(`Client ${socket.id} exited area: ${areaName}.`);
 
       // 클라이언트에게 데이터 전송
