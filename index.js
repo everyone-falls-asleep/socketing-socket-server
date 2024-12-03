@@ -239,8 +239,6 @@ async function getAreasForRoom(eventId) {
     SELECT
       area.id,
       area.label,
-      area.x,
-      area.y,
       area.svg,
       area.price
     FROM area
