@@ -263,6 +263,7 @@ async function getSeatsForArea(eventDateId, areaId) {
       seat.cy,
       seat.row,
       seat.number,
+      seat."areaId" AS area_id,
       reservation.id AS reservation_id,
       eventDate.id AS event_date_id,
       eventDate.date
@@ -287,6 +288,7 @@ async function getSeatsForArea(eventDateId, areaId) {
         cy: row.cy,
         row: row.row,
         number: row.number,
+        area_id: row.area_id,
         reservations: [],
         selectedBy: null, // 초기 상태
         updatedAt: null, // 초기 상태
@@ -1048,11 +1050,9 @@ async function handleClientLeave(socket, roomName) {
     // Room의 현재 접속자 수 확인
     // const currentConnections =
     //   io.sockets.adapter.rooms.get(roomName)?.size || 0;
-
     // fastify.log.info(
     //   `Client ${socket.id} left room: ${roomName}. Current connections: ${currentConnections}/${MAX_ROOM_CONNECTIONS}`
     // );
-
     // 접속자가 최대치 아래로 떨어지면 RabbitMQ에 신호 전송
     // if (currentConnections < MAX_ROOM_CONNECTIONS) {
     //   await sendMessageToQueue(roomName, "allow");
