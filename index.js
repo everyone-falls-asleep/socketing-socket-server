@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const SELECTION_TIMEOUT = 10 * 1000; // 선택 만료 시간: 10초
-const MAX_ROOM_CONNECTIONS = 30; // 각 Room의 최대 접속자 수
+const MAX_ROOM_CONNECTIONS = 50; // 각 Room의 최대 접속자 수
 
 const schema = {
   type: "object",
