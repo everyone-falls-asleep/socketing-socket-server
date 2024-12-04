@@ -332,15 +332,42 @@ async function createOrder(client, userId) {
 
 // 새로운 Reservation 생성
 async function createReservation(client, seatId, eventDateId, orderId) {
-  await client.query(
+  const { rows } = await client.query(
     `
       INSERT INTO reservation ("seatId", "eventDateId", "orderId", "createdAt", "updatedAt")
       VALUES ($1, $2, $3, NOW(), NOW())
       ON CONFLICT ("seatId", "eventDateId") DO UPDATE
       SET "orderId" = $3, "updatedAt" = NOW(), "deletedAt" = NULL
+      RETURNING id, "eventDateId";
     `,
     [seatId, eventDateId, orderId]
   );
+
+  if (rows.length === 0) {
+    throw new Error("Failed to create or update reservation.");
+  }
+
+  // `eventDateId`로 `eventDate`의 상세 정보를 조회
+  const eventDateQuery = `
+    SELECT id, date
+    FROM event_date
+    WHERE id = $1;
+  `;
+  const { rows: eventDateRows } = await client.query(eventDateQuery, [
+    rows[0].eventDateId,
+  ]);
+
+  if (eventDateRows.length === 0) {
+    throw new Error("Event date not found.");
+  }
+
+  return {
+    id: rows[0].id,
+    eventDate: {
+      id: eventDateRows[0].id,
+      date: eventDateRows[0].date,
+    },
+  };
 }
 
 // Order에 대한 정보 가져오는 함수
@@ -902,20 +929,13 @@ io.on("connection", (socket) => {
             continue;
           }
 
-          const currentTime = new Date().toISOString();
-
-          // 좌석 상태 업데이트
-          seat.selectedBy = null;
-          seat.updatedAt = currentTime;
-          seat.expirationTime = null;
-          seat.reservedBy = socket.id;
-          seat.reservations = reservationInfo.reservations;
-
-          // Redis 업데이트
-          await updateSeatInRedis(areaName, seatId, seat);
-
           // 2. `reservation` 테이블 업데이트
-          await createReservation(client, seatId, eventDateId, orderId);
+          const newReservation = await createReservation(
+            client,
+            seatId,
+            eventDateId,
+            orderId
+          );
 
           // 예약 성공 좌석 추가
           reservedSeats.push({
@@ -933,6 +953,17 @@ io.on("connection", (socket) => {
             reservedBy: seat.reservedBy,
           });
 
+          const currentTime = new Date().toISOString();
+
+          // 좌석 상태 업데이트
+          seat.selectedBy = null;
+          seat.updatedAt = currentTime;
+          seat.expirationTime = null;
+          seat.reservedBy = socket.id;
+          seat.reservations = [newReservation];
+
+          // Redis 업데이트
+          await updateSeatInRedis(areaName, seatId, seat);
           fastify.log.info(
             `Seat ${seatId} reserved by ${socket.id} in area ${areaName}`
           );
