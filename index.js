@@ -911,7 +911,7 @@ io.on("connection", (socket) => {
             socket.emit("error", {
               message: `Failed to retrieve reservation status for seat ${seatId}.`,
             });
-            continue;
+            return;
           }
 
           // Redis에서 좌석 정보 조회
@@ -919,19 +919,37 @@ io.on("connection", (socket) => {
           if (!seat) {
             fastify.log.warn(`Invalid seat ID: ${seatId}`);
             socket.emit("error", { message: `Invalid seat ID: ${seatId}.` });
-            continue;
+            return;
           }
 
           // 좌석이 이미 예약되었는지 확인
-          if (seat.reservations.length > 0) {
-            fastify.log.warn(
-              `Seat ${seatId} is already reserved by another user.`
-            );
+          if (seat.reservations.length !== 0) {
             socket.emit("error", {
-              message: `Seat ${seatId} is already reserved by another user.`,
+              message: `Seat ${seat.id} is reserved and cannot be selected.`,
             });
-            continue;
+            return;
           }
+
+          // 이미 다른 유저가 선택한 좌석인지 확인
+          const expired = await isSeatExpired(areaName, seat.id);
+          if (
+            seat.selectedBy !== null &&
+            seat.selectedBy !== socket.id &&
+            !expired
+          ) {
+            socket.emit("error", {
+              message: `Seat ${seat.id} is already selected by another user.`,
+            });
+            return;
+          }
+
+          const currentTime = new Date().toISOString();
+
+          // 좌석 상태 업데이트
+          seat.selectedBy = null;
+          seat.updatedAt = currentTime;
+          seat.expirationTime = null;
+          seat.reservedBy = socket.id;
 
           // 2. `reservation` 테이블 업데이트
           const newReservation = await createReservation(
@@ -957,13 +975,6 @@ io.on("connection", (socket) => {
             reservedBy: seat.reservedBy,
           });
 
-          const currentTime = new Date().toISOString();
-
-          // 좌석 상태 업데이트
-          seat.selectedBy = null;
-          seat.updatedAt = currentTime;
-          seat.expirationTime = null;
-          seat.reservedBy = socket.id;
           seat.reservations = [newReservation];
 
           // Redis 업데이트
