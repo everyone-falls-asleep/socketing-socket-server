@@ -681,12 +681,12 @@ io.on("connection", (socket) => {
 
       fastify.log.info(`currentConnections: ${currentConnections}`);
       // Room 접속자가 최대치를 초과하면 연결 거부
-      if (currentConnections >= MAX_ROOM_CONNECTIONS) {
-        socket.emit("error", {
-          message: `Room ${roomName} is full. Maximum connections reached.`,
-        });
-        return;
-      }
+      // if (currentConnections >= MAX_ROOM_CONNECTIONS) {
+      //   socket.emit("error", {
+      //     message: `Room ${roomName} is full. Maximum connections reached.`,
+      //   });
+      //   return;
+      // }
 
       // 클라이언트를 해당 room에 추가
       socket.join(roomName);
