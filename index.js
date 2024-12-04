@@ -466,9 +466,9 @@ function formatOrderResponse(orderDetails) {
 }
 
 // Redis에서 구역 정보를 저장
-async function setAreaDataInRedis(roomName, areaData) {
-  await fastify.redis.set(`areaData:${roomName}`, JSON.stringify(areaData));
-}
+// async function setAreaDataInRedis(roomName, areaData) {
+//   await fastify.redis.set(`areaData:${roomName}`, JSON.stringify(areaData));
+// }
 
 // 구역 별 예약 상태를 Redis에 저장
 async function updateAreaInRedis(roomName, areaId, area) {
@@ -492,9 +492,9 @@ async function getAllAreasFromRedis(roomName) {
 }
 
 // Redis에서 좌석 정보를 구역 별로 저장
-async function setSeatDataInRedis(areaName, seatData) {
-  await fastify.redis.set(`seatData:${areaName}`, JSON.stringify(seatData));
-}
+// async function setSeatDataInRedis(areaName, seatData) {
+//   await fastify.redis.set(`seatData:${areaName}`, JSON.stringify(seatData));
+// }
 
 // 좌석 선택 상태를 Redis에 저장
 async function updateSeatInRedis(areaName, seatId, seat) {
@@ -706,7 +706,7 @@ io.on("connection", (socket) => {
         for (const area of areas) {
           await updateAreaInRedis(roomName, area.id, area);
         }
-        await setAreaDataInRedis(roomName, areas);
+        // await setAreaDataInRedis(roomName, areas);
       }
 
       // 클라이언트에게 데이터 전송
@@ -747,7 +747,7 @@ io.on("connection", (socket) => {
         for (const seat of seats) {
           await updateSeatInRedis(areaName, seat.id, seat);
         }
-        await setSeatDataInRedis(areaName, seats);
+        // await setSeatDataInRedis(areaName, seats);
       }
 
       // 클라이언트에게 데이터 전송
