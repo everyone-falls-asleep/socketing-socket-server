@@ -888,8 +888,8 @@ io.on("connection", (socket) => {
       const reservedSeats = [];
       const broadcastUpdates = [];
 
-      const client = await fastify.pg.connect();
       try {
+        const client = await fastify.pg.connect();
         await client.query("BEGIN"); // 트랜잭션 시작
 
         // 1. `order` 레코드 생성
@@ -1010,14 +1010,18 @@ io.on("connection", (socket) => {
           io.to(areaName).emit("seatsSelected", broadcastUpdates);
         }
       } catch (error) {
-        await client.query("ROLLBACK"); // 트랜잭션 롤백
-        // 에러 처리
-        fastify.log.error(`Error reserving seats: ${error.message}`);
-        socket.emit("error", {
-          message: "An unexpected error occurred while reserving seats.",
-        });
+        if (client) {
+          await client.query("ROLLBACK"); // 트랜잭션 롤백
+          // 에러 처리
+          fastify.log.error(`Error reserving seats: ${error.message}`);
+          socket.emit("error", {
+            message: "An unexpected error occurred while reserving seats.",
+          });
+        }
       } finally {
-        client.release();
+        if (client) {
+          client.release();
+        }
       }
     }
   );
