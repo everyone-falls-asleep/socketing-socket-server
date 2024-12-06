@@ -807,32 +807,11 @@ io.on("connection", (socket) => {
         return;
       }
 
-      let seatsToSelect = [];
+      const seatsToSelect = [];
 
       if (numberOfSeats === 1) {
         // 단일 좌석 선택
-        seatsToSelect.push(selectedSeat);
-      } else {
-        // 연석 선택
-        const adjacentSeats = findAdjacentSeats(
-          allSeats,
-          selectedSeat,
-          numberOfSeats
-        );
 
-        // 가능한 좌석이 요청한 좌석 수보다 적으면 리턴
-        if (adjacentSeats.length < numberOfSeats) {
-          socket.emit("error", {
-            message: "Not enough adjacent seats available",
-          });
-          return;
-        }
-
-        seatsToSelect = adjacentSeats;
-      }
-
-      const result = [];
-      for (const seat of seatsToSelect) {
         // 이미 예매된 좌석인지 확인
         if (seat.reservations.length !== 0) {
           socket.emit("error", {
@@ -850,6 +829,27 @@ io.on("connection", (socket) => {
           return;
         }
 
+        seatsToSelect.push(selectedSeat);
+      } else {
+        // 연석 선택
+        const adjacentSeats = findAdjacentSeats(
+          allSeats,
+          selectedSeat,
+          numberOfSeats
+        );
+
+        // 가능한 좌석이 요청한 좌석 수보다 적으면 리턴
+        if (adjacentSeats.length < numberOfSeats) {
+          socket.emit("error", {
+            message: "Not enough adjacent seats available",
+          });
+          return;
+        }
+        seatsToSelect.push(...adjacentSeats);
+      }
+
+      const result = [];
+      for (const seat of seatsToSelect) {
         // 선택될 좌석 상태 변경
         seat.selectedBy = socket.id;
         seat.updatedAt = currentTime;
@@ -1213,7 +1213,14 @@ function findAdjacentSeats(seats, selectedSeat, numberOfSeats) {
     (seat) => seat.reservations.length === 0 && seat.selectedBy === null
   );
 
-  const result = [selectedSeat]; // 처음 선택한 좌석은 항상 포함
+  const result = []; // 초기 배열을 비워둠
+
+  // 중복 좌석 체크 함수
+  const isSeatAlreadySelected = (seat) =>
+    result.some((r) => r.row === seat.row && r.number === seat.number);
+
+  // 초기 좌석 추가
+  result.push(selectedSeat);
 
   let offset = 1;
   // 같은 행(row)에서 좌석 찾기
@@ -1234,7 +1241,7 @@ function findAdjacentSeats(seats, selectedSeat, numberOfSeats) {
         (s) =>
           s.row === pos.row && // 같은 행인지 확인
           s.number === pos.number && // 해당 좌석 번호인지 확인
-          !result.includes(s) // 이미 선택된 좌석이 아닌지 확인
+          !isSeatAlreadySelected(s) // 중복 좌석 체크
       );
 
       if (seat) {
@@ -1279,7 +1286,7 @@ function findAdjacentSeats(seats, selectedSeat, numberOfSeats) {
             (s) =>
               s.row === pos.row && // 해당 행인지 확인
               s.number === pos.number && // 해당 좌석 번호인지 확인
-              !result.includes(s) // 이미 선택된 좌석이 아닌지 확인
+              !isSeatAlreadySelected(s) // 중복 좌석 체크
           );
 
           if (seat) {
@@ -1298,23 +1305,25 @@ function findAdjacentSeats(seats, selectedSeat, numberOfSeats) {
   // 아직도 좌석을 다 찾지 못한 경우, 동일한 구역 내의 다른 좌석들을 추가
   if (result.length < numberOfSeats) {
     // 남은 좌석들을 거리 순으로 정렬
-    const remainingSeats = availableSeats.sort((a, b) => {
-      const rowDiff =
-        Math.abs(a.row - selectedRow) - Math.abs(b.row - selectedRow);
-      if (rowDiff !== 0) return rowDiff;
-      return (
-        Math.abs(a.number - selectedNumber) -
-        Math.abs(b.number - selectedNumber)
-      );
-    });
+    const remainingSeats = availableSeats
+      .filter((seat) => !isSeatAlreadySelected(seat)) // 이미 선택된 좌석 제외
+      .sort((a, b) => {
+        const rowDiff =
+          Math.abs(a.row - selectedRow) - Math.abs(b.row - selectedRow);
+        if (rowDiff !== 0) return rowDiff;
+        return (
+          Math.abs(a.number - selectedNumber) -
+          Math.abs(b.number - selectedNumber)
+        );
+      });
 
     for (const seat of remainingSeats) {
       if (result.length >= numberOfSeats) break;
-      result.push(seat); // 좌석을 결과에 추가
+      result.push(seat); // 좌석 추가
     }
   }
 
-  return result; // 최종 좌석 리스트 반환
+  return result;
 }
 
 const startServer = async () => {
