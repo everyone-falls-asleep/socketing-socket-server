@@ -19,7 +19,7 @@ jobs:
         run: echo "BRANCH_NAME=${GITHUB_REF#refs/heads/}" >> $GITHUB_ENV
 
       - name: Get Commit Message
-        run: echo "COMMIT_MESSAGE=$(git log -1 --pretty=%B)" >> $GITHUB_ENV
+        run: echo "COMMIT_MESSAGE=$(git log -1 --pretty=%B | head -n 1)" >> $GITHUB_ENV
 
       - name: Deploy to Server via SSH
         uses: appleboy/ssh-action@v1.1.0
