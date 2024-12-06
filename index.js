@@ -813,18 +813,18 @@ io.on("connection", (socket) => {
         // 단일 좌석 선택
 
         // 이미 예매된 좌석인지 확인
-        if (seat.reservations.length !== 0) {
+        if (selectedSeat.reservations.length !== 0) {
           socket.emit("error", {
-            message: `Seat ${seat.id} is reserved and cannot be selected.`,
+            message: `Seat ${selectedSeat.id} is reserved and cannot be selected.`,
           });
           return;
         }
 
         // 이미 다른 유저가 선택한 좌석인지 확인
-        const expired = await isSeatExpired(areaName, seat.id);
-        if (seat.selectedBy && !expired) {
+        const expired = await isSeatExpired(areaName, selectedSeat.id);
+        if (selectedSeat.selectedBy && !expired) {
           socket.emit("error", {
-            message: `Seat ${seat.id} is already selected by another user.`,
+            message: `Seat ${selectedSeat.id} is already selected by another user.`,
           });
           return;
         }
