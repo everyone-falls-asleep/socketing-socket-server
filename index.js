@@ -111,8 +111,9 @@ fastify.get("/readiness", async (request, reply) => {
     }
 
     // PostgreSQL 상태 확인
+    let client;
     try {
-      const client = await fastify.pg.connect();
+      client = await fastify.pg.connect();
       if (client) {
         dbStatus = {
           status: "connected",
@@ -888,8 +889,9 @@ io.on("connection", (socket) => {
       const reservedSeats = [];
       const broadcastUpdates = [];
 
+      let client;
       try {
-        const client = await fastify.pg.connect();
+        client = await fastify.pg.connect();
         await client.query("BEGIN"); // 트랜잭션 시작
 
         // 1. `order` 레코드 생성
