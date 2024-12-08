@@ -398,7 +398,9 @@ async function getOrderDetails(client, orderId) {
         seat.number AS seat_number,
         area.id AS area_id,
         area.label AS area_label,
-        area.price AS area_price
+        area.price AS area_price,
+        "event_date".id AS event_date_id,
+        "event_date".date AS event_date
       FROM
         "order"
       JOIN
@@ -411,6 +413,8 @@ async function getOrderDetails(client, orderId) {
         area ON area.id = seat."areaId"
       JOIN
         event ON event.id = area."eventId"
+      JOIN
+        "event_date" ON "event_date"."eventId" = event.id
       WHERE
         "order".id = $1;
     `,
@@ -442,9 +446,15 @@ function formatOrderResponse(orderDetails) {
     ticketingStartTime: order.event_ticketing_start_time,
   };
 
+  const eventDate = {
+    id: order.event_date_id,
+    date: order.event_date,
+  };
+
   const reservations = orderDetails.map((detail) => ({
     id: detail.reservation_id,
     seat: {
+      id: detail.seat_id,
       row: detail.seat_row,
       number: detail.seat_number,
       area: {
@@ -463,6 +473,7 @@ function formatOrderResponse(orderDetails) {
     },
     event,
     reservations,
+    eventDate,
   };
 }
 
@@ -899,7 +910,7 @@ io.on("connection", (socket) => {
       }
 
       const areaName = `${eventId}_${eventDateId}_${areaId}`;
-      const reservedSeats = [];
+      // const reservedSeats = [];
       const broadcastUpdates = [];
 
       let client;
@@ -974,12 +985,12 @@ io.on("connection", (socket) => {
             orderId
           );
 
-          // 예약 성공 좌석 추가
-          reservedSeats.push({
-            seatId: seat.id,
-            selectedBy: seat.selectedBy,
-            reservedBy: seat.reservedBy,
-          });
+          // // 예약 성공 좌석 추가
+          // reservedSeats.push({
+          //   seatId: seat.id,
+          //   selectedBy: seat.selectedBy,
+          //   reservedBy: seat.reservedBy,
+          // });
 
           // 브로드캐스트 업데이트에 추가
           broadcastUpdates.push({
