@@ -539,17 +539,17 @@ async function isSeatExpired(areaName, seatId) {
 
 // 새로운 Order를 Redis에 임시 저장
 async function createOrderInRedis(areaName, seatIds, userId, eventDateId) {
-  let orderId = crypto.randomUUID();
+  let id = crypto.randomUUID();
   const orderStatus = "pending"; // 초기 상태
   const createdAt = new Date().toISOString();
 
   // Redis에 Order 데이터 저장
   await fastify.redis.hset(
     `order:${areaName}`,
-    orderId,
+    id,
     JSON.stringify({ userId, eventDateId, seatIds, orderStatus, createdAt })
   );
-  return orderId;
+  return id;
 }
 
 // Redis에서 임시 주문 정보 가져오기
@@ -1025,12 +1025,10 @@ io.on("connection", (socket) => {
         eventDateId
       );
       await setPaymentExpirationInRedis(areaName, orderId);
-      console.log("111");
       fastify.log.info(`order ${orderId} is made temporarily by ${socket.id}`);
       const order = await getOrderFromRedis(areaName, orderId);
-      fastify.log.info(order);
-      console.log(order);
-      console.log("222");
+      fastify.log.info(`order: ${order}`);
+
       //try {
 
       const selectedArea = await getAreaFromRedis(roomName, areaId);
@@ -1040,7 +1038,8 @@ io.on("connection", (socket) => {
         price: selectedArea.price,
       };
       const reservationData = {
-        eventDateId: eventDateId,
+        id: orderId,
+        createdAt: order.createdAt,
         seats: seatsToReserve,
         area: area,
       };
