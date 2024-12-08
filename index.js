@@ -535,6 +535,15 @@ async function isSeatExpired(areaName, seatId) {
   return !status; // 존재하지 않으면 만료됨
 }
 
+async function validateToken(token) {
+  const status = await fastify.redis.get(`token:${token}`);
+  if (status === "issued") {
+    await fastify.redis.del(`token:${token}`); // 토큰 사용 완료 처리
+    return true;
+  }
+  return false;
+}
+
 // Redis Keyspace Notifications를 위한 Subscriber 설정
 const redisSubscriber = fastify.redis.duplicate();
 // await redisSubscriber.connect();
@@ -646,11 +655,15 @@ async function getRoomUserCount(io, roomName) {
   return sockets.length; // 소켓 수 반환
 }
 
-io.use((socket, next) => {
+io.use(async (socket, next) => {
   const token = socket.handshake.auth.token;
 
   if (!token) {
     return next(new Error("Authentication error"));
+  }
+
+  if (!(await validateToken(token))) {
+    return next(new Error("Authentication error 2"));
   }
 
   try {
