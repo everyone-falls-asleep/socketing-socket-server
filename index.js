@@ -565,12 +565,6 @@ instrument(io, {
   mode: "development",
 });
 
-// 실시간 서버 시간 브로드캐스트
-setInterval(() => {
-  const serverTime = new Date().toISOString();
-  io.emit("serverTime", serverTime);
-}, 1000); // 1초마다 서버 시간 전송
-
 // Redis 기반 유저 수 가져오기 함수
 async function getRoomUserCount(io, roomName) {
   const sockets = await io.in(roomName).fetchSockets(); // 모든 노드에서 룸에 속한 소켓 ID 가져오기
@@ -1062,7 +1056,7 @@ io.on("connection", (socket) => {
           FROM reservation
           INNER JOIN seat ON reservation."seatId" = seat.id
           INNER JOIN area AS area ON seat."areaId" = area.id
-          WHERE reservation."eventDateId" = $1 
+          WHERE reservation."eventDateId" = $1
             AND reservation."orderId" = $2
         `,
           [eventDateId, savedOrderId]
