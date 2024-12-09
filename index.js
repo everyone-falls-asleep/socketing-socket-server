@@ -1066,18 +1066,40 @@ io.on("connection", (socket) => {
     const areaName = `${eventId}_${eventDateId}_${areaId}`;
 
     try {
-      if (areaName != socket.id) {
-        await handleClientLeaveArea(socket, areaName);
-      }
-
       socket.leave(areaName);
-
-      fastify.log.info(`Client ${socket.id} exited area: ${areaName}.`);
-
       // 클라이언트에게 데이터 전송
       socket.emit("areaExited", {
         message: `You have left the area: ${areaName}`,
       });
+
+      const allSeats = await getAllSeatsFromRedis(areaName);
+      await releaseSeats(socket.id, allSeats, areaName);
+
+      fastify.log.info(`Client ${socket.id} left area: ${areaName}.`);
+    } catch (error) {
+      fastify.log.error(`Error exiting area ${areaName}:`, error);
+      socket.emit("error", {
+        message: "Failed to leave current area.",
+      });
+    }
+  });
+
+  socket.on("exitRoom", async ({ eventId, eventDateId }) => {
+    if (!eventId || !eventDateId) {
+      socket.emit("error", { message: "Invalid room parameters." });
+      return;
+    }
+
+    const roomName = `${eventId}_${eventDateId}`;
+
+    try {
+      socket.leave(roomName);
+      // 클라이언트에게 데이터 전송
+      socket.emit("roomExited", {
+        message: `You have left the room: ${roomName}`,
+      });
+
+      fastify.log.info(`Client ${socket.id} left room: ${roomName}.`);
     } catch (error) {
       fastify.log.error(`Error exiting area ${areaName}:`, error);
       socket.emit("error", {
@@ -1174,20 +1196,15 @@ async function handleClientLeave(socket, roomName) {
     // }
 
     // 마지막 사용자인 경우 reservation interval 타이머 제거
-    clearReservationStatusInterval(roomName);
+    if (roomIntervals[roomName]) {
+      clearReservationStatusInterval(roomName);
+    }
   } catch (error) {
     fastify.log.error(
       `Error handling client leave for room ${roomName}:`,
       error
     );
   }
-}
-
-async function handleClientLeaveArea(socket, areaName) {
-  const allSeats = await getAllSeatsFromRedis(areaName);
-  await releaseSeats(socket.id, allSeats, areaName);
-
-  fastify.log.info(`Client ${socket.id} left area: ${areaName}.`);
 }
 
 function startReservationStatusInterval(eventId, eventDateId) {
