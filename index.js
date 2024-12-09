@@ -937,41 +937,55 @@ io.on("connection", (socket) => {
 
   socket.on(
     "requestOrder",
-    async (
-      { userId, orderId, paymentMethod, eventId, eventDateId, areaId },
-      callback
-    ) => {
+    async ({
+      userId,
+      orderId,
+      paymentMethod,
+      eventId,
+      eventDateId,
+      areaId,
+    }) => {
       const areaName = `${eventId}_${eventDateId}_${areaId}`;
-      const orderData = await getOrderFromRedis(areaName, orderId);
-      console.log(orderData);
+      const redisOrderData = await getOrderFromRedis(areaName, orderId);
+      console.log(redisOrderData);
 
       const client = await fastify.pg.connect(); // PostgreSQL 클라이언트 연결
       try {
         await client.query("BEGIN"); // 트랜잭션 시작
-        console.log("try문 입장");
         // 사용자 검증
         const userResult = await debugQuery(
           client,
           `SELECT * FROM "user" WHERE id = $1`,
           [userId]
         );
-        //console.log('userResult', userResult)
         const user = userResult.rows[0];
-        //console.log(user);
         if (!user) {
           throw { code: "USER_NOT_FOUND", message: "User not found." };
         }
 
-        // EventDate 검증
-        const eventDateResult = await debugQuery(
+        // EventDate 및 Event 검증
+        const eventResult = await debugQuery(
           client,
-          "SELECT * FROM event_date WHERE id = $1",
+          `
+            SELECT
+              ed.id AS "eventDateId",
+              ed.date AS "eventDate",
+              e.id AS "eventId",
+              e.title AS "eventTitle",
+              e.place AS "eventPlace",
+              e.cast AS "eventCast",
+              e.thumbnail AS "eventThumbnail",
+              e."ageLimit" AS "eventAgeLimit"
+            FROM event_date ed
+            INNER JOIN event e ON ed."eventId" = e.id
+            WHERE ed.id = $1
+          `,
           [eventDateId]
         );
-        //console.log('eventDateResult', eventDateResult);
-        const eventDate = eventDateResult.rows[0];
-        //console.log(eventDate);
-        if (!eventDate) {
+
+        // 결과 처리
+        const event = eventResult.rows[0];
+        if (!event) {
           throw {
             code: "EVENT_DATE_NOT_FOUND",
             message: "Event date not found.",
@@ -980,49 +994,45 @@ io.on("connection", (socket) => {
 
         // 좌석 검증
         // const seatIds = seats.map((seat) => seat.id);
-        const seatIds = orderData.seatIds;
-        //console.log(1);
-        console.log(seatIds);
+        const seatIds = redisOrderData.seatIds;
         const seatResult = await client.query(
-          `SELECT * FROM seat WHERE id = ANY($1::uuid[])`,
+          `
+          SELECT 
+            s.*, 
+            a.id AS "areaId",
+            a.label AS "areaLabel",
+            a.price AS "areaPrice"
+          FROM seat s
+          INNER JOIN area a ON s."areaId" = a.id
+          WHERE s.id = ANY($1::uuid[])
+        `,
           [seatIds]
         );
-        //console.log(seatResult);
-        const validSeats = seatResult.rows;
-        if (validSeats.length !== seatIds.length) {
-          const missingSeats = seatIds.filter(
-            (seatId) => !validSeats.some((seat) => seat.id === seatId)
-          );
-          throw {
-            code: "SEAT_NOT_FOUND",
-            message: `Seats not found: ${missingSeats.join(", ")}`,
-          };
-        }
-        console.log("validSeats", validSeats);
+
+        // Seat 배열 생성
+        const seatsArray = seatResult.rows;
 
         // 예약 여부 검증
-        for (const seat of validSeats) {
+        for (const seatId of seatIds) {
           const reservationCheck = await debugQuery(
             client,
             `
             SELECT * FROM reservation
             WHERE "eventDateId" = $1 AND "seatId" = $2 AND "deletedAt" IS NULL
           `,
-            [eventDateId, seat.id]
+            [eventDateId, seatId]
           );
-          //console.log(1);
-          //console.log(reservationCheck);
           if (reservationCheck.rows.length > 0) {
             throw {
               code: "EXISTING_ORDER",
-              message: `Seat ${seat.id} is already reserved.`,
+              message: `Seat ${seatId} is already reserved.`,
             };
           }
         }
 
         // 주문 생성
         // order를 생성하고 반환된 orderId를 사용
-        const orderResult = await debugQuery(
+        const pgOrderResult = await debugQuery(
           client,
           `
             INSERT INTO "order" ("userId", "paymentMethod")
@@ -1031,28 +1041,29 @@ io.on("connection", (socket) => {
           `,
           [userId, paymentMethod]
         );
-        console.log(1);
-        console.log(orderResult);
 
-        const savedOrderId = orderResult.rows[0].id;
-        console.log(savedOrderId);
-
-        // 다중 예약 데이터를 준비 (eventDateId와 seatId 포함)
-        const reservationValues = validSeats
-          .map((seat) => `('${savedOrderId}', '${eventDateId}', '${seat.id}')`)
-          .join(",");
+        const pgSavedOrder = pgOrderResult.rows[0];
+        const pgSavedOrderId = pgSavedOrder.id;
 
         // reservation 테이블에 다중 row 삽입
-        await debugQuery(
-          client,
-          `
-          INSERT INTO reservation ("orderId", "eventDateId", "seatId")
-          VALUES ${reservationValues}
-        `
-        );
+        for (const seatId of seatIds) {
+          const reservationParam = {
+            pgSavedOrderId,
+            eventDateId,
+            seatId,
+          };
 
-        const order = orderResult.rows[0];
-        console.log(order);
+          const query = `
+            INSERT INTO reservation ("orderId", "eventDateId", "seatId")
+            VALUES ($1, $2, $3)
+          `;
+
+          await debugQuery(client, query, [
+            reservationParam.pgSavedOrderId,
+            reservationParam.eventDateId,
+            reservationParam.seatId,
+          ]);
+        }
 
         // 총 금액 계산
         const totalAmountResult = await debugQuery(
@@ -1065,11 +1076,10 @@ io.on("connection", (socket) => {
           WHERE reservation."eventDateId" = $1 
             AND reservation."orderId" = $2
         `,
-          [eventDateId, savedOrderId]
+          [eventDateId, pgSavedOrderId]
         );
 
         const totalAmount = Number(totalAmountResult.rows[0]?.totalAmount || 0);
-        console.log(totalAmount);
 
         if (isNaN(totalAmount)) {
           throw { code: "INVALID_AMOUNT", message: "Invalid total amount." };
@@ -1090,40 +1100,41 @@ io.on("connection", (socket) => {
 
         // 응답 데이터 구성
         const responseData = {
-          orderId: order.id,
-          orderCreatedAt: order.createdAt,
-          orderCanceledAt: order.canceledAt,
-          paymentMethod: order.paymentMethod,
-          totalAmount,
-          user: {
-            useId: user.id,
-            userNickname: user.nickname,
-            userEmail: user.email,
-          },
-          reservations: validSeats.map((seat) => ({
-            reservationId: seat.id,
+          orderId: pgSavedOrder.id,
+          orderCreatedAt: pgSavedOrder.createdAt,
+          orderUpdatedAt: pgSavedOrder.updatedAt,
+          orderCanceledAt: pgSavedOrder.canceledAt,
+          paymentMethod: pgSavedOrder.paymentMethod,
+          useId: user.id,
+          userNickname: user.nickname,
+          userEmail: user.email,
+          userProfileImage: user.profileImage,
+          userRole: user.role,
+          eventId: event.eventId,
+          eventTitle: event.eventTitle,
+          eventPlace: event.eventPlace,
+          eventCast: event.eventCast,
+          eventDate: event.eventDate,
+          eventThumbnail: event.eventThumbnail,
+          eventAgeLimit: event.eventAgeLimit,
+          reservations: seatsArray.map((seat) => ({
+            seatId: seat.id,
             seatRow: seat.row,
             seatNumber: seat.number,
-            seapPrice: seat.price,
+            seatAreaId: seat.areaId,
+            seatAreaLabel: seat.areaLabel,
+            seatPrice: seat.areaPrice,
           })),
-          event: {
-            eventId: eventDate.eventId,
-            eventTitle: eventDate.title,
-            date: eventDate.date,
-          },
         };
 
         await client.query("COMMIT"); // 트랜잭션 커밋
 
-        const redisValue = await updateOrderInRedis(areaName, orderId);
-        console.log(
-          `Order ${order.id} status updated to ${redisValue} in Redis`
-        );
+        await updateOrderInRedis(areaName, orderId);
 
         socket.emit("orderApproved", { success: true, data: responseData });
       } catch (error) {
         await client.query("ROLLBACK"); // 트랜잭션 롤백
-        console.error("Error processing payment request:", error);
+        console.error("Error processing order request:", error);
 
         // 에러 응답 전송
         socket.emit("orderApproved", {
