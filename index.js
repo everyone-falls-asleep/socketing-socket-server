@@ -212,7 +212,7 @@ async function getSeatsForArea(eventDateId, areaId) {
       reservation.id AS reservation_id,
       eventDate.id AS event_date_id,
       eventDate.date,
-      "order"."userId" AS reserved_by
+      "order"."userId" AS reserved_user_id
     FROM seat
     LEFT JOIN reservation ON reservation."seatId" = seat.id AND reservation."deletedAt" IS NULL
     LEFT JOIN event_date AS eventDate ON reservation."eventDateId" = eventDate.id
@@ -237,7 +237,7 @@ async function getSeatsForArea(eventDateId, areaId) {
         number: row.number,
         area_id: row.area_id,
         selectedBy: null,
-        reservedBy: row.reserved_by || null, // 예약된 유저 ID
+        reservedUserId: row.reserved_user_id || null, // 예약된 유저 ID
         updatedAt: null, // 초기 상태
         expirationTime: null, // 초기 상태
       });
@@ -461,7 +461,7 @@ const handleExpirationEvent = async (areaName, seatId) => {
       seat.selectedBy = null;
       seat.updatedAt = new Date().toISOString();
       seat.expirationTime = null;
-      seat.reservedBy = null;
+      seat.reservedUserId = null;
 
       await updateSeatInRedis(areaName, seatId, seat);
 
@@ -471,7 +471,7 @@ const handleExpirationEvent = async (areaName, seatId) => {
           selectedBy: null,
           updatedAt: seat.updatedAt,
           expirationTime: null,
-          reservedBy: null,
+          reservedUserId: null,
         },
       ]);
 
@@ -660,7 +660,7 @@ io.on("connection", (socket) => {
         // 단일 좌석 선택
 
         // 이미 예매된 좌석인지 확인
-        if (selectedSeat.reservedBy) {
+        if (selectedSeat.reservedUserId) {
           socket.emit("error", {
             message: `Seat ${selectedSeat.id} is reserved and cannot be selected.`,
           });
@@ -749,7 +749,7 @@ io.on("connection", (socket) => {
           }
 
           // 좌석이 이미 예약되었는지 확인
-          if (seat.reservedBy) {
+          if (seat.reservedUserId) {
             socket.emit("error", {
               message: `Seat ${seat.id} is reserved and cannot be selected.`,
             });
@@ -772,7 +772,7 @@ io.on("connection", (socket) => {
           const currentTime = new Date().toISOString();
 
           // 좌석 상태 업데이트
-          seat.reservedBy = userId;
+          seat.reservedUserId = userId;
           seat.selectedBy = null;
           seat.updatedAt = currentTime;
           seat.expirationTime = null;
@@ -794,7 +794,7 @@ io.on("connection", (socket) => {
             selectedBy: seat.selectedBy,
             updatedAt: seat.updatedAt,
             expirationTime: seat.expirationTime,
-            reservedBy: seat.reservedBy,
+            reservedUserId: seat.reservedUserId,
           });
         }
       } catch (error) {
@@ -1112,14 +1112,14 @@ async function releaseSeats(socketId, seats, areaName) {
       seat.selectedBy = null;
       seat.updatedAt = currentTime;
       seat.expirationTime = null;
-      seat.reservedBy = null;
+      seat.reservedUserId = null;
 
       seatsToRelease.push({
         seatId: seat.id,
         selectedBy: seat.selectedBy,
         updatedAt: seat.updatedAt,
         expirationTime: seat.expirationTime,
-        reservedBy: seat.reservedBy,
+        reservedUserId: seat.reservedUserId,
       });
 
       await fastify.redis.del(`timer:${areaName}:${seat.id}`); // Redis 만료 키 제거
@@ -1219,7 +1219,7 @@ function startReservationStatusInterval(eventId, eventDateId) {
 
           const totalSeatsNum = seats.length;
           const reservedSeatsNum = seats.filter(
-            (seat) => seat.reservedBy !== null
+            (seat) => seat.reservedUserId !== null
           ).length;
           areaStats.push({
             areaId: areaId,
@@ -1261,7 +1261,7 @@ function findAdjacentSeats(seats, selectedSeat, numberOfSeats) {
 
   // 예약되지 않은 좌석들과 선택되지 않은 좌석들만 필터링
   const availableSeats = seats.filter(
-    (seat) => seat.reservedBy === null && seat.selectedBy === null
+    (seat) => seat.reservedUserId === null && seat.selectedBy === null
   );
 
   const result = []; // 초기 배열을 비워둠
