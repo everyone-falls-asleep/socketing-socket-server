@@ -412,8 +412,8 @@ async function updateOrderInRedis(areaName, orderId) {
     );
 
     // 업데이트 결과 확인
-    const updatedOrder = await getOrderFromRedis(areaName, orderId);
-    console.log("Updated Order in Redis:", updatedOrder);
+    const updatedRedisOrder = await getOrderFromRedis(areaName, orderId);
+    return updatedRedisOrder;
   } catch (error) {
     console.error("Error updating order in Redis:", error);
     throw error; // 예외를 호출자로 전달
@@ -927,14 +927,6 @@ io.on("connection", (socket) => {
     }
   );
 
-  const debugQuery = async (client, query, params) => {
-    console.log("Executing Query:");
-    console.log(query);
-    console.log("With Parameters:");
-    console.log(params);
-    return client.query(query, params);
-  };
-
   socket.on(
     "requestOrder",
     async ({
@@ -947,14 +939,12 @@ io.on("connection", (socket) => {
     }) => {
       const areaName = `${eventId}_${eventDateId}_${areaId}`;
       const redisOrderData = await getOrderFromRedis(areaName, orderId);
-      console.log(redisOrderData);
 
       const client = await fastify.pg.connect(); // PostgreSQL 클라이언트 연결
       try {
         await client.query("BEGIN"); // 트랜잭션 시작
         // 사용자 검증
-        const userResult = await debugQuery(
-          client,
+        const userResult = await client.query(
           `SELECT * FROM "user" WHERE id = $1`,
           [userId]
         );
@@ -964,8 +954,7 @@ io.on("connection", (socket) => {
         }
 
         // EventDate 및 Event 검증
-        const eventResult = await debugQuery(
-          client,
+        const eventResult = await client.query(
           `
             SELECT
               ed.id AS "eventDateId",
@@ -1014,8 +1003,7 @@ io.on("connection", (socket) => {
 
         // 예약 여부 검증
         for (const seatId of seatIds) {
-          const reservationCheck = await debugQuery(
-            client,
+          const reservationCheck = await client.query(
             `
             SELECT * FROM reservation
             WHERE "eventDateId" = $1 AND "seatId" = $2 AND "deletedAt" IS NULL
@@ -1032,8 +1020,7 @@ io.on("connection", (socket) => {
 
         // 주문 생성
         // order를 생성하고 반환된 orderId를 사용
-        const pgOrderResult = await debugQuery(
-          client,
+        const pgOrderResult = await client.query(
           `
             INSERT INTO "order" ("userId", "paymentMethod")
             VALUES ($1, $2)
@@ -1058,7 +1045,7 @@ io.on("connection", (socket) => {
             VALUES ($1, $2, $3)
           `;
 
-          await debugQuery(client, query, [
+          await client.query(query, [
             reservationParam.pgSavedOrderId,
             reservationParam.eventDateId,
             reservationParam.seatId,
@@ -1066,8 +1053,7 @@ io.on("connection", (socket) => {
         }
 
         // 총 금액 계산
-        const totalAmountResult = await debugQuery(
-          client,
+        const totalAmountResult = await client.query(
           `
           SELECT SUM(area.price) AS "totalAmount"
           FROM reservation
@@ -1092,8 +1078,7 @@ io.on("connection", (socket) => {
             message: "Insufficient balance.",
           };
         }
-        await debugQuery(
-          client,
+        await client.query(
           `UPDATE "user" SET point = point - $1 WHERE id = $2`,
           [totalAmount, userId]
         );
