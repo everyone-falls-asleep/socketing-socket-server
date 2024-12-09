@@ -1084,6 +1084,30 @@ io.on("connection", (socket) => {
     }
   });
 
+  socket.on("exitRoom", async ({ eventId, eventDateId }) => {
+    if (!eventId || !eventDateId) {
+      socket.emit("error", { message: "Invalid room parameters." });
+      return;
+    }
+
+    const roomName = `${eventId}_${eventDateId}`;
+
+    try {
+      socket.leave(roomName);
+      // 클라이언트에게 데이터 전송
+      socket.emit("roomExited", {
+        message: `You have left the room: ${roomName}`,
+      });
+
+      fastify.log.info(`Client ${socket.id} left room: ${roomName}.`);
+    } catch (error) {
+      fastify.log.error(`Error exiting area ${areaName}:`, error);
+      socket.emit("error", {
+        message: "Failed to leave current area.",
+      });
+    }
+  });
+
   // 클라이언트 연결 해제 처리
   socket.on("disconnect", async () => {
     fastify.log.info(`Client disconnected: ${socket.id}`);
