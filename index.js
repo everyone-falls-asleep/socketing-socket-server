@@ -514,7 +514,7 @@ async function getRoomUserCount(io, roomName) {
     try {
       // const sockets = await io.in(roomName).fetchSockets(); // 모든 노드에서 룸에 속한 소켓 ID 가져오기
       const res = await fastify.redis.get(`room:${roomName}:count`);
-      return res; // 소켓 수 반환
+      return res || 0; // 소켓 수 반환
     } catch (err) {
       console.error(
         `Timeout reached, retrying (attempt ${attempt}/${maxRetries})...`
