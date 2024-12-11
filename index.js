@@ -213,7 +213,7 @@ async function getSeatsForArea(eventDateId, areaId) {
       eventDate.date,
       "order"."userId" AS reserved_user_id
     FROM seat
-    LEFT JOIN reservation ON reservation."seatId" = seat.id AND reservation."deletedAt" IS NULL
+    LEFT JOIN reservation ON reservation."seatId" = seat.id AND reservation."canceledAt" IS NULL AND reservation."deletedAt" IS NULL
     LEFT JOIN event_date AS eventDate ON reservation."eventDateId" = eventDate.id
     LEFT JOIN "order" ON reservation."orderId" = "order".id AND "order"."canceledAt" IS NULL AND "order"."deletedAt" IS NULL
     WHERE seat."areaId" = $1
@@ -900,9 +900,9 @@ io.on("connection", (socket) => {
       const areaName = `${eventId}_${eventDateId}_${areaId}`;
       const redisOrderData = await getOrderFromRedis(areaName, orderId);
 
-      const client = await fastify.pg.connect(); // PostgreSQL 클라이언트 연결
+      const client = await fastify.pg.connect();
       try {
-        await client.query("BEGIN"); // 트랜잭션 시작
+        await client.query("BEGIN");
         // 사용자 검증
         const userResult = await client.query(
           `SELECT * FROM "user" WHERE id = $1`,
@@ -941,8 +941,6 @@ io.on("connection", (socket) => {
           };
         }
 
-        // 좌석 검증
-        // const seatIds = seats.map((seat) => seat.id);
         const seatIds = redisOrderData.seatIds;
         const seatResult = await client.query(
           `
@@ -965,8 +963,14 @@ io.on("connection", (socket) => {
         for (const seatId of seatIds) {
           const reservationCheck = await client.query(
             `
-            SELECT * FROM reservation
-            WHERE "eventDateId" = $1 AND "seatId" = $2 AND "deletedAt" IS NULL
+            SELECT * 
+            FROM reservation r
+            LEFT JOIN "order" o ON r."orderId" = "o".id
+            WHERE "eventDateId" = $1 
+            AND r."seatId" = $2 
+            AND r."canceledAt" IS NULL
+            AND r."deletedAt" IS NULL
+            AND o."canceledAt" IS NULL
           `,
             [eventDateId, seatId]
           );
@@ -1082,8 +1086,7 @@ io.on("connection", (socket) => {
         console.error("Error processing order request:", error);
 
         // 에러 응답 전송
-        socket.emit("orderApproved", {
-          success: false,
+        socket.emit("error", {
           error: error.code || "UNKNOWN_ERROR",
           message: error.message || "An unexpected error occurred.",
         });
