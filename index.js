@@ -1153,7 +1153,7 @@ io.on("connection", (socket) => {
 // 클라이언트가 Room을 떠날 때 처리
 io.of("/").adapter.on("leave-room", async (room, id) => {
   if (room != id) {
-    await decrementRoomCount(`room:${room}:count`);
+    await decrementRoomCount(room);
     io.serverSideEmit("leave-room", { room, id });
     const socket = io.sockets.sockets.get(id);
     if (socket) {
