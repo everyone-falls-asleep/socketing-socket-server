@@ -527,6 +527,21 @@ async function getRoomUserCount(io, roomName) {
   }
 }
 
+async function decrementRoomCount(room) {
+  const decrementScript = `
+  local key = KEYS[1]
+  local value = redis.call("GET", key)
+  if value and tonumber(value) > 0 then
+    return redis.call("DECR", key)
+  else
+    return 0
+  end
+`;
+  const key = `room:${room}:count`;
+  const count = await fastify.redis.eval(decrementScript, 1, key);
+  return parseInt(count, 10);
+}
+
 function decorrelatedJitter(baseDelay, maxDelay, previousDelay) {
   if (!previousDelay) {
     previousDelay = baseDelay;
@@ -1140,7 +1155,7 @@ io.on("connection", (socket) => {
 // 클라이언트가 Room을 떠날 때 처리
 io.of("/").adapter.on("leave-room", async (room, id) => {
   if (room != id) {
-    await fastify.redis.decr(`room:${room}:count`);
+    await decrementRoomCount(`room:${room}:count`);
     io.serverSideEmit("leave-room", { room, id });
     const socket = io.sockets.sockets.get(id);
     if (socket) {
