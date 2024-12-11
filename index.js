@@ -14,7 +14,6 @@ import { dirname, join } from "node:path";
 import crypto from "node:crypto";
 
 const SELECTION_TIMEOUT = 10 * 1000; // 선택 만료 시간: 10초
-const MAX_ROOM_CONNECTIONS = 50; // 각 Room의 최대 접속자 수
 const RESERVATION_STATUS_INTERVAL = 1 * 1000; // 좌석 예매 현황 불러오는 주기: 1초
 const PAYMENT_TIMEOUT = 60 * 1000; // 결제 만료 시간: 1분 (테스트용)
 
@@ -564,9 +563,7 @@ io.on("connection", (socket) => {
       socket.join(roomName);
 
       fastify.log.info(
-        `Client ${socket.id} joined room: ${roomName}. Current connections: ${
-          currentConnections + 1
-        }/${MAX_ROOM_CONNECTIONS}`
+        `Client ${socket.id} joined room: ${roomName}. Current connections: ${currentConnections + 1}`
       );
 
       // 구역 정보 가져오기
