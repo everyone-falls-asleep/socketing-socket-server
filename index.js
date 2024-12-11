@@ -601,7 +601,7 @@ io.on("connection", (socket) => {
 
       // 클라이언트를 해당 room에 추가
       socket.join(roomName);
-      await fastify.redis.incr(`room:${room}:count`);
+      await fastify.redis.incr(`room:${roomName}:count`);
 
       fastify.log.info(
         `Client ${socket.id} joined room: ${roomName}. Current connections: ${currentConnections + 1}`
