@@ -507,14 +507,14 @@ instrument(io, {
 });
 
 // Redis 기반 유저 수 가져오기 함수
-async function getRoomUserCount(io, roomName) {
+async function getRoomUserCount(roomName) {
   const maxRetries = 30;
   let delay = null;
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       // const sockets = await io.in(roomName).fetchSockets(); // 모든 노드에서 룸에 속한 소켓 ID 가져오기
-      const res = await fastify.redis.get(`room:${roomName}:count`);
-      return res || 0; // 소켓 수 반환
+      const count = await fastify.redis.get(`room:${roomName}:count`);
+      return parseInt(count || "0"); // 소켓 수 반환
     } catch (err) {
       console.error(
         `Timeout reached, retrying (attempt ${attempt}/${maxRetries})...`
@@ -539,7 +539,7 @@ async function decrementRoomCount(room) {
 `;
   const key = `room:${room}:count`;
   const count = await fastify.redis.eval(decrementScript, 1, key);
-  return parseInt(count, 10);
+  return parseInt(count || "0");
 }
 
 function decorrelatedJitter(baseDelay, maxDelay, previousDelay) {
@@ -587,10 +587,6 @@ io.on("connection", (socket) => {
     const roomName = `${eventId}_${eventDateId}`;
 
     try {
-      // Room의 현재 접속자 수 가져오기
-      const currentConnections = await getRoomUserCount(io, roomName);
-
-      fastify.log.info(`currentConnections: ${currentConnections}`);
       // Room 접속자가 최대치를 초과하면 연결 거부
       // if (currentConnections >= MAX_ROOM_CONNECTIONS) {
       //   socket.emit("error", {
@@ -601,7 +597,9 @@ io.on("connection", (socket) => {
 
       // 클라이언트를 해당 room에 추가
       socket.join(roomName);
-      await fastify.redis.incr(`room:${roomName}:count`);
+      const currentConnections = await fastify.redis.incr(
+        `room:${roomName}:count`
+      );
 
       fastify.log.info(
         `Client ${socket.id} joined room: ${roomName}. Current connections: ${currentConnections + 1}`
@@ -1297,7 +1295,7 @@ function startReservationStatusInterval(eventId, eventDateId) {
 
 async function clearReservationStatusInterval(roomName) {
   try {
-    const currentConnections = await getRoomUserCount(io, roomName);
+    const currentConnections = await getRoomUserCount(roomName);
     fastify.log.info(
       `roomName: ${roomName}, currentConnections: ${currentConnections}`
     );
