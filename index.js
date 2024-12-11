@@ -508,8 +508,32 @@ instrument(io, {
 
 // Redis 기반 유저 수 가져오기 함수
 async function getRoomUserCount(io, roomName) {
-  const sockets = await io.in(roomName).fetchSockets(); // 모든 노드에서 룸에 속한 소켓 ID 가져오기
-  return sockets.length; // 소켓 수 반환
+  const maxRetries = 30;
+  let delay = null;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const sockets = await io.in(roomName).fetchSockets(); // 모든 노드에서 룸에 속한 소켓 ID 가져오기
+      return sockets.length; // 소켓 수 반환
+    } catch (err) {
+      console.error(
+        `Timeout reached, retrying (attempt ${attempt}/${maxRetries})...`
+      );
+      await new Promise((resolve) => {
+        delay = decorrelatedJitter(100, 60000, delay);
+        setTimeout(resolve, delay);
+      });
+    }
+  }
+}
+
+function decorrelatedJitter(baseDelay, maxDelay, previousDelay) {
+  if (!previousDelay) {
+    previousDelay = baseDelay;
+  }
+  return Math.min(
+    maxDelay,
+    Math.random() * (previousDelay * 3 - baseDelay) + baseDelay
+  );
 }
 
 io.use(async (socket, next) => {
@@ -907,8 +931,8 @@ io.on("connection", (socket) => {
         const seatIds = redisOrderData.seatIds;
         const seatResult = await client.query(
           `
-          SELECT 
-            s.*, 
+          SELECT
+            s.*,
             a.id AS "areaId",
             a.label AS "areaLabel",
             a.price AS "areaPrice"
