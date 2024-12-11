@@ -512,8 +512,9 @@ async function getRoomUserCount(io, roomName) {
   let delay = null;
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      const sockets = await io.in(roomName).fetchSockets(); // 모든 노드에서 룸에 속한 소켓 ID 가져오기
-      return sockets.length; // 소켓 수 반환
+      // const sockets = await io.in(roomName).fetchSockets(); // 모든 노드에서 룸에 속한 소켓 ID 가져오기
+      const res = await fastify.redis.get(`room:${roomName}:count`);
+      return res; // 소켓 수 반환
     } catch (err) {
       console.error(
         `Timeout reached, retrying (attempt ${attempt}/${maxRetries})...`
@@ -585,6 +586,7 @@ io.on("connection", (socket) => {
 
       // 클라이언트를 해당 room에 추가
       socket.join(roomName);
+      await fastify.redis.incr(`room:${room}:count`);
 
       fastify.log.info(
         `Client ${socket.id} joined room: ${roomName}. Current connections: ${currentConnections + 1}`
@@ -1137,9 +1139,10 @@ io.on("connection", (socket) => {
 
 // 클라이언트가 Room을 떠날 때 처리
 io.of("/").adapter.on("leave-room", async (room, id) => {
-  const socket = io.sockets.sockets.get(id);
   if (room != id) {
+    await fastify.redis.decr(`room:${room}:count`);
     io.serverSideEmit("leave-room", { room, id });
+    const socket = io.sockets.sockets.get(id);
     if (socket) {
       await handleClientLeave(socket, room);
     }
