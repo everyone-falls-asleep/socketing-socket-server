@@ -572,7 +572,7 @@ io.use(async (socket, next) => {
   }
 });
 
-const roomIntervals = {};
+// const roomIntervals = {};
 io.on("connection", (socket) => {
   fastify.log.info(`New client connected: ${socket.id}`);
 
@@ -623,7 +623,30 @@ io.on("connection", (socket) => {
         areas,
       });
 
-      startReservationStatusInterval(eventId, eventDateId);
+      // startReservationStatusInterval(eventId, eventDateId);
+
+      const jwtToken = jwt.sign(
+        {
+          jti: crypto.randomUUID(),
+          sub: "scheduling",
+          eventId,
+          eventDateId,
+        },
+        fastify.config.JWT_SECRET,
+        {
+          expiresIn: 600, // 10분
+        }
+      );
+
+      await fetch(
+        "https://socketing.hjyoon.me/scheduling/seat/reservation/statistic",
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${jwtToken}`, // JWT 토큰 추가
+          },
+        }
+      );
     } catch (error) {
       fastify.log.error(`Error fetching data for room ${roomName}:`, error);
       socket.emit("error", {
@@ -980,11 +1003,11 @@ io.on("connection", (socket) => {
         for (const seatId of seatIds) {
           const reservationCheck = await client.query(
             `
-            SELECT * 
+            SELECT *
             FROM reservation r
             LEFT JOIN "order" o ON r."orderId" = "o".id
-            WHERE "eventDateId" = $1 
-            AND r."seatId" = $2 
+            WHERE "eventDateId" = $1
+            AND r."seatId" = $2
             AND r."canceledAt" IS NULL
             AND r."deletedAt" IS NULL
             AND o."canceledAt" IS NULL
@@ -1251,11 +1274,10 @@ async function handleClientLeave(socket, roomName) {
     // if (currentConnections < MAX_ROOM_CONNECTIONS) {
     //   await sendMessageToQueue(roomName, "allow");
     // }
-
     // 마지막 사용자인 경우 reservation interval 타이머 제거
-    if (roomIntervals[roomName]) {
-      clearReservationStatusInterval(roomName);
-    }
+    // if (roomIntervals[roomName]) {
+    //   clearReservationStatusInterval(roomName);
+    // }
   } catch (error) {
     fastify.log.error(
       `Error handling client leave for room ${roomName}:`,
@@ -1264,70 +1286,70 @@ async function handleClientLeave(socket, roomName) {
   }
 }
 
-function startReservationStatusInterval(eventId, eventDateId) {
-  const roomName = `${eventId}_${eventDateId}`;
-  // 만약 해당 room에 대한 타이머가 없다면 생성
-  if (!roomIntervals[roomName]) {
-    roomIntervals[roomName] = setInterval(async () => {
-      try {
-        // areas 및 areaStats 계산 로직
-        let areas = await getAllAreasFromRedis(roomName);
-        if (areas.length === 0) {
-          areas = await getAreasForRoom(eventId);
-          for (const area of areas) {
-            await updateAreaInRedis(roomName, area.id, area);
-          }
-        }
+// function startReservationStatusInterval(eventId, eventDateId) {
+//   const roomName = `${eventId}_${eventDateId}`;
+//   // 만약 해당 room에 대한 타이머가 없다면 생성
+//   if (!roomIntervals[roomName]) {
+//     roomIntervals[roomName] = setInterval(async () => {
+//       try {
+//         // areas 및 areaStats 계산 로직
+//         let areas = await getAllAreasFromRedis(roomName);
+//         if (areas.length === 0) {
+//           areas = await getAreasForRoom(eventId);
+//           for (const area of areas) {
+//             await updateAreaInRedis(roomName, area.id, area);
+//           }
+//         }
 
-        const areaStats = [];
-        for (const area of areas) {
-          const areaId = area.id;
-          const areaName = `${eventId}_${eventDateId}_${areaId}`;
-          let seats = await getAllSeatsFromRedis(areaName);
-          if (seats.length === 0) {
-            seats = await getSeatsForArea(eventDateId, areaId);
-            for (const seat of seats) {
-              await updateSeatInRedis(areaName, seat.id, seat);
-            }
-          }
+//         const areaStats = [];
+//         for (const area of areas) {
+//           const areaId = area.id;
+//           const areaName = `${eventId}_${eventDateId}_${areaId}`;
+//           let seats = await getAllSeatsFromRedis(areaName);
+//           if (seats.length === 0) {
+//             seats = await getSeatsForArea(eventDateId, areaId);
+//             for (const seat of seats) {
+//               await updateSeatInRedis(areaName, seat.id, seat);
+//             }
+//           }
 
-          const totalSeatsNum = seats.length;
-          const reservedSeatsNum = seats.filter(
-            (seat) => seat.reservedUserId !== null
-          ).length;
-          areaStats.push({
-            areaId: areaId,
-            totalSeatsNum: totalSeatsNum,
-            reservedSeatsNum: reservedSeatsNum,
-          });
-        }
+//           const totalSeatsNum = seats.length;
+//           const reservedSeatsNum = seats.filter(
+//             (seat) => seat.reservedUserId !== null
+//           ).length;
+//           areaStats.push({
+//             areaId: areaId,
+//             totalSeatsNum: totalSeatsNum,
+//             reservedSeatsNum: reservedSeatsNum,
+//           });
+//         }
 
-        // 해당 room에 통계 정보 전송
-        io.to(roomName).emit("reservedSeatsStatistic", areaStats);
-      } catch (error) {
-        fastify.log.error(
-          `Error emitting reservedSeatsStatistic: ${error.message}`
-        );
-      }
-    }, RESERVATION_STATUS_INTERVAL); // 2초마다 실행
-  }
-}
+//         // 해당 room에 통계 정보 전송
+//         io.to(roomName).emit("reservedSeatsStatistic", areaStats);
+//       } catch (error) {
+//         fastify.log.error(
+//           `Error emitting reservedSeatsStatistic: ${error.message}`
+//         );
+//       }
+//     }, RESERVATION_STATUS_INTERVAL); // 2초마다 실행
+//   }
+// }
 
-async function clearReservationStatusInterval(roomName) {
-  try {
-    const currentConnections = await getRoomUserCount(roomName);
-    fastify.log.info(
-      `roomName: ${roomName}, currentConnections: ${currentConnections}`
-    );
-    if (currentConnections < 1 && roomIntervals[roomName]) {
-      clearInterval(roomIntervals[roomName]);
-      delete roomIntervals[roomName];
-      fastify.log.info(`Interval for room ${roomName} has been cleared.`);
-    }
-  } catch {
-    fastify.log.info(`Failed to clear Interval for room ${roomName}`);
-  }
-}
+// async function clearReservationStatusInterval(roomName) {
+//   try {
+//     const currentConnections = await getRoomUserCount(roomName);
+//     fastify.log.info(
+//       `roomName: ${roomName}, currentConnections: ${currentConnections}`
+//     );
+//     if (currentConnections < 1 && roomIntervals[roomName]) {
+//       clearInterval(roomIntervals[roomName]);
+//       delete roomIntervals[roomName];
+//       fastify.log.info(`Interval for room ${roomName} has been cleared.`);
+//     }
+//   } catch {
+//     fastify.log.info(`Failed to clear Interval for room ${roomName}`);
+//   }
+// }
 
 function findAdjacentSeats(seats, selectedSeat, numberOfSeats) {
   const selectedRow = selectedSeat.row;
