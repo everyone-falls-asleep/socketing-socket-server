@@ -897,19 +897,28 @@ io.on("connection", (socket) => {
       eventDateId,
       areaId,
     }) => {
+      if (
+        !userId ||
+        !orderId ||
+        !paymentMethod ||
+        !eventId ||
+        !eventDateId ||
+        !areaId
+      ) {
+        socket.emit("error", { message: "Invalid requestOrder parameters." });
+        return;
+      }
       const areaName = `${eventId}_${eventDateId}_${areaId}`;
+
       const redisOrderData = await getOrderFromRedis(areaName, orderId);
+      if (!redisOrderData) {
+        socket.emit("error", { message: "Invalid cache requestOrderData" });
+        return;
+      }
 
       const client = await fastify.pg.connect();
       try {
         await client.query("BEGIN");
-
-        if (!redisOrderData) {
-          throw {
-            code: "CACHE_ORDER_NOT_FOUND",
-            message: "Order not found in cache.",
-          };
-        }
 
         // 사용자 검증
         const userResult = await client.query(
