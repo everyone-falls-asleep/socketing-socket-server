@@ -903,6 +903,14 @@ io.on("connection", (socket) => {
       const client = await fastify.pg.connect();
       try {
         await client.query("BEGIN");
+
+        if (!redisOrderData) {
+          throw {
+            code: "CACHE_ORDER_NOT_FOUND",
+            message: "Order not found in cache.",
+          };
+        }
+
         // 사용자 검증
         const userResult = await client.query(
           `SELECT * FROM "user" WHERE id = $1`,
