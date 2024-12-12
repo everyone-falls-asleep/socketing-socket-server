@@ -22,6 +22,7 @@ const schema = {
   required: [
     "PORT",
     "JWT_SECRET",
+    "JWT_SECRET_FOR_ENTRANCE",
     "CACHE_HOST",
     "CACHE_PORT",
     "DB_URL",
@@ -32,6 +33,9 @@ const schema = {
       type: "string",
     },
     JWT_SECRET: {
+      type: "string",
+    },
+    JWT_SECRET_FOR_ENTRANCE: {
       type: "string",
     },
     CACHE_HOST: {
@@ -564,7 +568,7 @@ io.use(async (socket, next) => {
   }
 
   try {
-    const decoded = jwt.verify(token, fastify.config.JWT_SECRET);
+    const decoded = jwt.verify(token, fastify.config.JWT_SECRET_FOR_ENTRANCE);
     socket.data.user = decoded;
     next();
   } catch (err) {
