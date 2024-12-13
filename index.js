@@ -1061,17 +1061,11 @@ io.on("connection", (socket) => {
         }
 
         // 총 금액 계산
-        const totalAmountResult = await client.query(
-          `
-          SELECT SUM(area.price) AS "totalAmount"
-          FROM reservation
-          INNER JOIN seat ON reservation."seatId" = seat.id
-          INNER JOIN area AS area ON seat."areaId" = area.id
-          WHERE reservation."eventDateId" = $1
-            AND reservation."orderId" = $2
-        `,
-          [eventDateId, pgSavedOrderId]
-        );
+        let totalPrice = 0;
+
+        for (let i = 0; i < seatsArray.length; i++) {
+          totalPrice += seatsArray[i].areaPrice;
+        }
 
         const totalAmount = Number(totalAmountResult.rows[0]?.totalAmount || 0);
 
