@@ -8,7 +8,7 @@ import cors from "@fastify/cors";
 import fastifyStatic from "@fastify/static";
 import fastifyRedis from "@fastify/redis";
 import fastifyPostgres from "@fastify/postgres";
-import fastifyRabbit from "fastify-rabbitmq";
+// import fastifyRabbit from "fastify-rabbitmq";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import crypto from "node:crypto";
@@ -26,7 +26,7 @@ const schema = {
     "CACHE_HOST",
     "CACHE_PORT",
     "DB_URL",
-    "MQ_URL",
+    // "MQ_URL",
   ],
   properties: {
     PORT: {
@@ -47,9 +47,9 @@ const schema = {
     DB_URL: {
       type: "string",
     },
-    MQ_URL: {
-      type: "string",
-    },
+    // MQ_URL: {
+    //   type: "string",
+    // },
   },
 };
 
@@ -79,9 +79,9 @@ await fastify.register(fastifyPostgres, {
   connectionString: fastify.config.DB_URL,
 });
 
-await fastify.register(fastifyRabbit, {
-  connection: fastify.config.MQ_URL,
-});
+// await fastify.register(fastifyRabbit, {
+//   connection: fastify.config.MQ_URL,
+// });
 
 await fastify.register(fastifyStatic, {
   root: join(__dirname, "dist"),
@@ -101,7 +101,7 @@ fastify.get("/readiness", async (request, reply) => {
   try {
     let redisStatus = { status: "disconnected", message: "" };
     let dbStatus = { status: "disconnected", message: "" };
-    let rabbitStatus = { status: "disconnected", message: "" };
+    // let rabbitStatus = { status: "disconnected", message: "" };
 
     // Redis 상태 확인
     try {
@@ -131,31 +131,31 @@ fastify.get("/readiness", async (request, reply) => {
     }
 
     // RabbitMQ 상태 확인
-    try {
-      if (fastify.rabbitmq.ready) {
-        rabbitStatus = {
-          status: "connected",
-          message: "RabbitMQ is connected and operational.",
-        };
-      } else {
-        rabbitStatus.message = "RabbitMQ is not connected.";
-      }
-    } catch (error) {
-      rabbitStatus.message = `RabbitMQ connection check failed: ${error.message}`;
-    }
+    // try {
+    //   if (fastify.rabbitmq.ready) {
+    //     rabbitStatus = {
+    //       status: "connected",
+    //       message: "RabbitMQ is connected and operational.",
+    //     };
+    //   } else {
+    //     rabbitStatus.message = "RabbitMQ is not connected.";
+    //   }
+    // } catch (error) {
+    //   rabbitStatus.message = `RabbitMQ connection check failed: ${error.message}`;
+    // }
 
     // 모든 상태가 정상일 때
     if (
       redisStatus.status === "connected" &&
-      dbStatus.status === "connected" &&
-      rabbitStatus.status === "connected"
+      dbStatus.status === "connected"
+      // rabbitStatus.status === "connected"
     ) {
       reply.send({
         status: "ok",
         message: "The server is ready.",
         redis: redisStatus,
         database: dbStatus,
-        rabbitmq: rabbitStatus,
+        // rabbitmq: rabbitStatus,
       });
     } else {
       // 하나라도 비정상일 때
@@ -164,7 +164,7 @@ fastify.get("/readiness", async (request, reply) => {
         message: "The server is not fully ready. See details below.",
         redis: redisStatus,
         database: dbStatus,
-        rabbitmq: rabbitStatus,
+        // rabbitmq: rabbitStatus,
       });
     }
   } catch (unexpectedError) {
@@ -1244,26 +1244,26 @@ async function releaseSeats(socketId, seats, areaName) {
 }
 
 // RabbitMQ 메시지 전송 로직
-async function sendMessageToQueue(roomName, message) {
-  const queueName = `queue:${roomName}`;
-  try {
-    // 큐 선언 (존재하지 않을 경우 생성)
-    await fastify.rabbitmq.queueDeclare({ queue: queueName, durable: true });
+// async function sendMessageToQueue(roomName, message) {
+//   const queueName = `queue:${roomName}`;
+//   try {
+//     // 큐 선언 (존재하지 않을 경우 생성)
+//     await fastify.rabbitmq.queueDeclare({ queue: queueName, durable: true });
 
-    // Publisher 생성
-    const publisher = fastify.rabbitmq.createPublisher({
-      confirm: true, // 메시지가 성공적으로 전송되었는지 확인
-      maxAttempts: 3, // 최대 재시도 횟수
-    });
+//     // Publisher 생성
+//     const publisher = fastify.rabbitmq.createPublisher({
+//       confirm: true, // 메시지가 성공적으로 전송되었는지 확인
+//       maxAttempts: 3, // 최대 재시도 횟수
+//     });
 
-    // 메시지 전송
-    await publisher.send(queueName, JSON.stringify(message));
+//     // 메시지 전송
+//     await publisher.send(queueName, JSON.stringify(message));
 
-    fastify.log.info(`Message sent to queue "${queueName}": ${message}`);
-  } catch (error) {
-    fastify.log.error(`Failed to send message to queue "${queueName}":`, error);
-  }
-}
+//     fastify.log.info(`Message sent to queue "${queueName}": ${message}`);
+//   } catch (error) {
+//     fastify.log.error(`Failed to send message to queue "${queueName}":`, error);
+//   }
+// }
 
 // 공통 로직: 클라이언트가 Room을 떠날 때 처리
 async function handleClientLeave(socket, roomName) {
